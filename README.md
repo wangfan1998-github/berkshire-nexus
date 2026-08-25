@@ -1,4 +1,4 @@
-# OmniAlpha Agent 🎯
+# BerkshireNexus 🎯
 
 > **集大成者**：融合 **Serenity 产业链物理瓶颈** + **Berkshire 价值四大师** + **Qlib 微软多因子量化** + **AI Hedge Fund 多智能体辩论** 的机构级 AI 投研决策框架。
 
@@ -11,13 +11,13 @@
 
 ---
 
-## 🌟 为什么需要 OmniAlpha？
+## 🌟 为什么需要 BerkshireNexus？
 
 直接问普通的通用 AI（ChatGPT / Claude）：“某某股票值不值得买？”，你通常只会得到一份**“一方面……另一方面……投资有风险，请自行判断”**的两头讨好套话。
 
 **这种分析看似全面，但在真实真金白银的交易中没有任何决策价值。**
 
-`OmniAlpha` 汲取并提炼了当前 GitHub 社区最前沿的四大投研开源项目之精华：
+`BerkshireNexus` 汲取并提炼了当前 GitHub 社区最前沿的四大投研开源项目之精华：
 1. **`serenity-skill`**：拆解产业链，寻找**不可替代、难以扩产的物理收费站（Chokepoint）**，拒绝纯讲故事的伪概念。
 2. **`ai-berkshire`**：践行**巴菲特、芒格、段永平、李录**四大师视角，执行**“5句话镜子测试”**与**“芒格逆向致死检验”**。
 3. **`danielchu97/Value-Investing-Agent`**：严谨计算**格雷厄姆数、两阶段所有者自由现金流（Owner Earnings DCF）与 5 维护城河评分**。
@@ -72,7 +72,7 @@ python3 -m src.cli analyze UBER
 **输出示例**：
 ```text
 ╔══════════════════════════════════════════════════════════════════════════════════════════════╗
-║                    🎯 OmniAlpha Executive Investment Memo: Uber Technologies, Inc.           ║
+║                  🎯 BerkshireNexus Executive Investment Memo: Uber Technologies, Inc.        ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════╝
 Ticker: UBER | Price: $79.29 | P/E: 17.4x | EPS: $4.56 | Beta: 1.16 | Sector: Internet / Mobility
 
@@ -81,7 +81,7 @@ Ticker: UBER | Price: $79.29 | P/E: 17.4x | EPS: $4.56 | Beta: 1.16 | Sector: In
 │ 2. Berkshire 4 Masters (大师) : 4.62/5.0 - STRONG BUY                                      │
 │ 3. Graham / DCF Valuation (估值) : MoS +16.9% (Intrinsic: $95.37) - Fairly Valued           │
 │ 4. Qlib Multi-Factor Alpha (量化): 64.6/100 (Q:64.6 V:76.8 G:51.4 M:67.4)                  │
-│ 5. Final OmniAlpha Score     : 79.3 / 100 ──► BUY / ACCUMULATE (Positive Asymmetry)        │
+│ 5. Final BerkshireNexus Score: 79.3 / 100 ──► BUY / ACCUMULATE (Positive Asymmetry)        │
 │ 6. Risk & Position Sizing    : Max Allocation 25.0% (Core Fortress Pillar)                 │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
 
@@ -109,7 +109,7 @@ python3 -m src.cli compare TSM UBER APP ADBE SOFI
 **输出示例**：
 ```text
 ╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║                           🏆 OmniAlpha Cross-Sectional Ranking & Comparison Board                          ║
+║                         🏆 BerkshireNexus Cross-Sectional Ranking & Comparison Board                       ║
 ╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
 
 Rank  Ticker   Company Name             Price (P/E)      Chokepoint      Masters      MoS (DCF)    Qlib Alpha   Total      Recommendation     
@@ -127,7 +127,7 @@ Rank  Ticker   Company Name             Price (P/E)      Chokepoint      Masters
 ## 🛠️ 项目目录结构
 
 ```text
-omni-alpha-agent/
+berkshire-nexus/
 ├── SKILL.md                 # Claude Code / Codex / Cursor Agent Skill 协议定义
 ├── README.md                # 中文完整文档
 ├── README_EN.md             # 英文文档
@@ -158,15 +158,15 @@ omni-alpha-agent/
 
 ```bash
 # 复制到 Claude skills 目录
-mkdir -p ~/.claude/skills/omni-alpha
-cp SKILL.md ~/.claude/skills/omni-alpha/
+mkdir -p ~/.claude/skills/berkshire-nexus
+cp SKILL.md ~/.claude/skills/berkshire-nexus/
 
 # 在 Claude 中即可直接唤起
-/omni-alpha analyze UBER
+/berkshire-nexus analyze UBER
 ```
 
 ---
 
 ## 📜 免责声明 (Disclaimer)
 
-*本项目（OmniAlpha Agent）仅供学术研究、AI 投资方法论探索及代码学习交流使用。本项目生成的任何分数、分析报告、大师辩论结果及仓位建议均不构成任何实质性的投资建议、买卖要约或财务推荐。金融市场有风险，投资需独立思考与谨慎决策。*
+*本项目（BerkshireNexus）仅供学术研究、AI 投资方法论探索及代码学习交流使用。本项目生成的任何分数、分析报告、大师辩论结果及仓位建议均不构成任何实质性的投资建议、买卖要约或财务推荐。金融市场有风险，投资需独立思考与谨慎决策。*

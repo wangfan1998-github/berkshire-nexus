@@ -1,9 +1,9 @@
 ---
-name: omni-alpha
+name: berkshire-nexus
 description: Institutional-grade Multi-Agent & Quantitative Investment Research Framework combining Berkshire Value Masters, Serenity Supply-Chain Chokepoints, and Qlib Multi-Factor Alpha.
 ---
 
-# OmniAlpha Agent Skill
+# BerkshireNexus Agent Skill
 
 An institutional-grade investment research skill for Claude Code and Codex that synthesizes:
 1. **Serenity Chokepoint Framework**: Physical unreplaceability, expansion barrier, and supply chain value capture.

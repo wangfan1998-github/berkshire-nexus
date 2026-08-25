@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "omni-alpha-agent"
+name = "berkshire-nexus"
 version = "1.0.0"
-description = "Multi-Agent & Quantitative Investment Research Framework combining Berkshire Value, Serenity Supply-Chain Bottlenecks, and Qlib Alpha Factors"
+description = "Multi-Agent & Quantitative Investment Research Framework combining Berkshire Value Masters, Serenity Supply-Chain Chokepoints, and Qlib Multi-Factor Alpha"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-omni-alpha = "src.cli:main"
+berkshire-nexus = "src.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

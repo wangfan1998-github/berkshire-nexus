@@ -1,4 +1,4 @@
-"""Terminal CLI interface for OmniAlpha Agent (Zero-Dependency ANSI + Rich Support)."""
+"""Terminal CLI interface for BerkshireNexus Agent (Zero-Dependency ANSI + Rich Support)."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def print_single_report(r: ComprehensiveAnalysisReport):
     risk = r.risk_assessment
 
     print(f"\n{BOLD}{CYAN}╔══════════════════════════════════════════════════════════════════════════════════════════════╗{RESET}")
-    print(f"{BOLD}{CYAN}║                    🎯 OmniAlpha Executive Investment Memo: {fin.name[:35]:<35} ║{RESET}")
+    print(f"{BOLD}{CYAN}║                  🎯 BerkshireNexus Executive Investment Memo: {fin.name[:30]:<30} ║{RESET}")
     print(f"{BOLD}{CYAN}╚══════════════════════════════════════════════════════════════════════════════════════════════╝{RESET}")
     print(f"{BOLD}Ticker:{RESET} {CYAN}{fin.ticker}{RESET} | {BOLD}Price:{RESET} ${fin.price:.2f} | {BOLD}P/E:{RESET} {fin.pe:.1f}x | {BOLD}EPS:{RESET} ${fin.eps:.2f} | {BOLD}Beta:{RESET} {fin.beta:.2f} | {BOLD}Sector:{RESET} {fin.sector}\n")
 
@@ -39,7 +39,7 @@ def print_single_report(r: ComprehensiveAnalysisReport):
     print(f"│ 2. Berkshire 4 Masters (大师) : {YELLOW}{debate.consensus_score}/5.0{RESET} - {debate.consensus_verdict}")
     print(f"│ 3. Graham / DCF Valuation (估值) : {GREEN}MoS {val.margin_of_safety_pct:+.1f}%{RESET} (Intrinsic: ${val.intrinsic_value_dcf:.2f}) - {val.valuation_status}")
     print(f"│ 4. Qlib Multi-Factor Alpha (量化): {MAGENTA}{quant.composite_alpha_score}/100{RESET} (Q:{quant.quality_score} V:{quant.value_score} G:{quant.growth_score} M:{quant.momentum_score})")
-    print(f"│ 5. Final OmniAlpha Score     : {BOLD}{YELLOW}{r.final_composite_score} / 100{RESET} ──► {BOLD}{GREEN}{r.overall_recommendation}{RESET}")
+    print(f"│ 5. Final BerkshireNexus Score: {BOLD}{YELLOW}{r.final_composite_score} / 100{RESET} ──► {BOLD}{GREEN}{r.overall_recommendation}{RESET}")
     print(f"│ 6. Risk & Position Sizing    : Max Allocation {BOLD}{YELLOW}{risk.recommended_max_allocation_pct:.1f}%{RESET} ({risk.portfolio_role})")
     print(f"{BOLD}{YELLOW}└────────────────────────────────────────────────────────────────────────────────────────────┘{RESET}\n")
 
@@ -73,7 +73,7 @@ def print_single_report(r: ComprehensiveAnalysisReport):
 
 def print_comparison_table(reports: List[ComprehensiveAnalysisReport]):
     print(f"\n{BOLD}{CYAN}╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗{RESET}")
-    print(f"{BOLD}{CYAN}║                           🏆 OmniAlpha Cross-Sectional Ranking & Comparison Board                          ║{RESET}")
+    print(f"{BOLD}{CYAN}║                         🏆 BerkshireNexus Cross-Sectional Ranking & Comparison Board                       ║{RESET}")
     print(f"{BOLD}{CYAN}╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝{RESET}\n")
 
     header_fmt = "{:<5} {:<8} {:<24} {:<16} {:<15} {:<12} {:<12} {:<12} {:<10} {:<18}"
@@ -112,8 +112,8 @@ def print_comparison_table(reports: List[ComprehensiveAnalysisReport]):
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="omni-alpha",
-        description="OmniAlpha Agent - Institutional-Grade AI Investment Research Framework."
+        prog="berkshire-nexus",
+        description="BerkshireNexus Agent - Institutional-Grade AI Investment Research Framework."
     )
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 

@@ -1,4 +1,4 @@
-# OmniAlpha Agent 🎯
+# BerkshireNexus 🎯
 
 > **The Ultimate Synthesis**: An institutional-grade AI investment research framework combining **Serenity Supply-Chain Chokepoints**, **Berkshire 4 Value Masters**, **Microsoft Qlib Multi-Factor Quant Alpha**, and **Multi-Agent Hedge Fund Boardroom Debate**.
 
@@ -11,11 +11,11 @@
 
 ---
 
-## 🌟 Why OmniAlpha?
+## 🌟 Why BerkshireNexus?
 
 Asking general LLMs "Should I buy stock X?" typically yields balanced, wishy-washy non-answers ending in "Invest at your own risk." **This provides zero actionable decision value for real capital.**
 
-`OmniAlpha` synthesizes and elevates the essence of the top open-source quantitative and value investing frameworks:
+`BerkshireNexus` synthesizes and elevates the essence of the top open-source quantitative and value investing frameworks:
 1. **`serenity-skill`**: Physical supply chain bottlenecks (**Chokepoints**) and expansion barriers.
 2. **`ai-berkshire`**: 4 Masters (**Buffett, Munger, Duan Yongping, Li Lu**) with **5-Sentence Mirror Tests** and **Munger Inversion**.
 3. **`danielchu97/Value-Investing-Agent`**: Graham Numbers, **Two-Stage Owner Earnings DCF**, and 5-Dimension Moat Scoring.
