@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import urllib.request
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict
 
 
 @dataclass
@@ -28,6 +29,9 @@ class CompanyFinancials:
     fifty_two_week_low: float = 0.0
     sector: str = ""
     description: str = ""
+    data_source: str = "unknown"
+    as_of_utc: str = ""
+    uses_fallback_data: bool = True
 
 
 # Default fallback profile metrics for standard tech/macro universe
@@ -167,6 +171,8 @@ class DataFetcher:
         """Fetch quote and fundamentals for a given ticker."""
         sym = ticker.upper().strip()
         data = _PRESET_DATA.get(sym, {}).copy()
+        quote_source = "curated-preset" if sym in _PRESET_DATA else "heuristic-fallback"
+        network_quote_loaded = False
 
         # Try online endpoint
         try:
@@ -187,6 +193,9 @@ class DataFetcher:
                         data["eps"] = float(item.get("eps"))
                     if item.get("beta"):
                         data["beta"] = float(item.get("beta"))
+                    network_quote_loaded = bool(item.get("last"))
+                    if network_quote_loaded:
+                        quote_source = "cnbc-quote+curated-fundamentals" if sym in _PRESET_DATA else "cnbc-quote+heuristic-fundamentals"
         except Exception:
             # Silently use cached/interpolated data
             pass
@@ -211,4 +220,10 @@ class DataFetcher:
             fifty_two_week_low=data.get("fifty_two_week_low", data.get("price", 100.0) * 0.85),
             sector=data.get("sector", "General Tech"),
             description=data.get("description", "Publicly traded company."),
+            data_source=quote_source,
+            as_of_utc=datetime.now(timezone.utc).isoformat(),
+            # CNBC only supplies a subset of the fields consumed by the analysis.
+            # Until a point-in-time fundamentals provider is connected, the
+            # resulting record is unsuitable for unattended live execution.
+            uses_fallback_data=True,
         )

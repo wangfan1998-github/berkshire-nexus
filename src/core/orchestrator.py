@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Dict, Any
+from datetime import datetime, timezone
+from typing import List
+from uuid import uuid4
 from ..data.fetcher import DataFetcher, CompanyFinancials
 from .chokepoint import ChokepointAnalyzer, ChokepointResult
 from .masters import MastersDebateEngine, MasterDebateResult
@@ -22,6 +24,8 @@ class ComprehensiveAnalysisReport:
     risk_assessment: RiskAssessment
     final_composite_score: float  # 0 to 100
     overall_recommendation: str    # STRONG BUY / BUY / HOLD / AVOID
+    analysis_id: str
+    generated_at_utc: str
 
 
 class OmniAlphaOrchestrator:
@@ -82,7 +86,9 @@ class OmniAlphaOrchestrator:
             quant_factors=quant,
             risk_assessment=risk,
             final_composite_score=final_score,
-            overall_recommendation=rec
+            overall_recommendation=rec,
+            analysis_id=uuid4().hex,
+            generated_at_utc=datetime.now(timezone.utc).isoformat(),
         )
 
     def compare_multiple(self, tickers: List[str]) -> List[ComprehensiveAnalysisReport]:

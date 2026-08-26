@@ -27,3 +27,11 @@ ENV/
 .vscode/
 *.swp
 .DS_Store
+
+# BerkshireNexus local trading/learning state (may contain portfolio history)
+.berkshire-nexus/
+paper_portfolio.json
+paper_executions.jsonl
+learning.json
+model_registry.json
+audits/

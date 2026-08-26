@@ -65,7 +65,75 @@
 
 ## 🚀 极速上手 (Quick Start)
 
-本项目采用 **零外部依赖（Zero Dependency）** 设计，无需繁琐的 `pip install` 环境配置，克隆后在任何 Python 3.7+ 终端均可直接秒级运行！
+本项目采用 **零外部依赖（Zero Dependency）** 设计，无需繁琐的 `pip install` 环境配置，克隆后在 Python 3.9+ 终端即可运行。
+
+### 0. 自动学习模拟交易 Agent（推荐从这里开始）
+
+新版在原有 BerkshireNexus 投研框架之上增加了一个可审计闭环：
+
+```text
+BerkshireNexus 分析 → 有界特征 → 自适应收益模型 → Champion/Challenger
+       → 目标仓位规划 → 确定性风控 → 持久化模拟成交 → 延迟收益标签
+```
+
+运行一次模拟盘周期：
+
+```bash
+python3 -m src.cli paper AAPL MSFT NVDA --cash 100000
+```
+
+默认状态写入 `.berkshire-nexus/`：
+
+- `paper_portfolio.json`：现金、持仓、当日权益与换手；
+- `paper_executions.jsonl`：仅追加的模拟成交日志；
+- `learning.json`：分析快照和到期后的前瞻收益标签；
+- `model_registry.json`：Champion / Challenger 模型；
+- `audits/cycle-*.json`：每轮分析、意图、风控和成交的完整审计记录。
+
+每个分析快照默认等待 20 个日历日再用新价格结算标签，达到 30 个样本后才训练 Challenger。训练集与验证集按时间顺序切分，不随机打乱。模型是透明、带 L2 约束的线性收益模型，只学习各投研因子与未来收益的历史关系，不会修改风控规则。
+
+自动晋升默认关闭。查看并人工晋升模型：
+
+```bash
+python3 -m src.cli model-status
+python3 -m src.cli model-promote
+```
+
+只在模拟盘中允许通过验证门槛的模型自动晋升：
+
+```bash
+python3 -m src.cli paper AAPL MSFT NVDA --auto-promote-paper
+```
+
+也可导入已经按时间点构造、带前瞻收益标签的数据。字段和值域参见 [`examples/learning_observations_template.csv`](examples/learning_observations_template.csv)，特征为 `0~1`，`forward_return` 使用小数收益率（`0.05` 表示 `+5%`）：
+
+```bash
+python3 -m src.cli learn examples/learning_observations_template.csv
+```
+
+示例只有两行，用于说明格式，不足以训练模型。生产数据必须确保每个特征只使用该行 `timestamp` 当时已知的信息，避免未来数据泄漏。
+
+### Binance 美股接入边界
+
+代码通过 Binance Stocks `/sapi/v1/equity/*` 原生 SAPI 适配，不依赖 CCXT。先做只读连通性和标的检查：
+
+```bash
+export BINANCE_API_KEY='your-read-only-key'
+python3 -m src.cli binance-preflight AAPL MSFT
+```
+
+当前版本**没有暴露一键实盘 CLI**。原因是自动实盘前还必须实现并验证 Binance 权威持仓/现金快照、订单状态回补和重启对账；用本地模拟持仓替代真实账户状态是不安全的。底层 `BinanceStocksClient.place_order()` 已实现，但需要同时满足构造参数 `allow_live_orders=True` 和进程确认变量 `BERKSHIRE_NEXUS_LIVE_TRADING=I_ACKNOWLEDGE_REAL_MONEY`，且固定发送 `tokenize=false`。
+
+所有订单都必须经过与模型隔离的确定性风控。默认规则包括：
+
+- 单一标的持仓不超过组合的 10%；
+- 每日总换手不超过组合的 25%；
+- 当日亏损达到 1% 后停止新增风险；
+- 实盘默认禁用市价单；
+- 含预置、回退或推断数据的分析不能触发实盘买入；
+- 风险开关触发后仍允许合法的减仓卖出。
+
+Binance Stocks 的账户资格、地区限制、PDT、交易时段和免责声明要求仍由 Binance 与当地法规决定。官方没有文档化的 Stocks 测试网，因此本项目把本地模拟盘作为上线前必经阶段。
 
 ### 1. 多股票横截面横向 PK 排序 (`compare`)
 
@@ -168,7 +236,7 @@ berkshire-nexus/
 ├── README.md                # 中文完整文档
 ├── README_EN.md             # 英文文档
 ├── pyproject.toml           # 现代 Python 封装配置
-├── requirements.txt         # 零外部依赖声明
+├── requirements.txt         # 无第三方运行时依赖
 ├── LICENSE                  # MIT 开源许可证
 ├── examples/                # 预置 6 篇机构级实战分析案例与资产看板
 │   ├── 01_tsm_chokepoint_analysis.md
@@ -176,10 +244,24 @@ berkshire-nexus/
 │   ├── 03_applovin_high_beta_satellite.md
 │   ├── 04_adobe_value_trap_or_deep_value.md
 │   ├── 05_sofi_redline_disqualification.md
-│   └── 06_cross_sectional_benchmark.md
+│   ├── 06_cross_sectional_benchmark.md
+│   └── learning_observations_template.csv # 外部学习数据格式示例
 └── src/
     ├── __init__.py
-    ├── cli.py               # 终端彩色交互 CLI（支持 analyze / compare）
+    ├── cli.py               # analyze / compare / paper / learn / model / preflight
+    ├── agent/
+    │   └── cycle.py         # 一轮研究→学习→规划→风控→模拟执行
+    ├── learning/
+    │   ├── features.py      # 固定值域、可复现的特征抽取
+    │   ├── model.py         # 线性收益模型与时间顺序验证
+    │   ├── registry.py      # Champion / Challenger 模型注册表
+    │   └── store.py         # 延迟标签和训练观察持久化
+    ├── trading/
+    │   ├── planner.py       # 目标仓位与再平衡意图
+    │   ├── risk.py          # 与模型隔离的确定性风控
+    │   ├── paper.py         # 持久化模拟券商
+    │   ├── binance_stocks.py # Binance Stocks 原生 SAPI 适配
+    │   └── types.py         # 订单、组合、成交契约
     ├── data/
     │   └── fetcher.py       # 零鉴权实时行情与财务数据抓取器
     └── core/
@@ -211,4 +293,4 @@ cp SKILL.md ~/.claude/skills/berkshire-nexus/
 
 ## 📜 免责声明 (Disclaimer)
 
-*本项目（BerkshireNexus）仅供学术研究、AI 投资方法论探索及量化代码交流使用。本系统输出的任何分数、估值结果、大师辩论意见和持仓上限建议均不构成任何实质性的投资建议或证券买卖要约。金融市场有风险，投资需独立思考与严谨决策。*
+*本项目（BerkshireNexus）仅供学术研究、AI 投资方法论探索及量化代码交流使用。本系统输出的任何分数、估值结果、大师辩论意见和持仓上限建议均不构成任何实质性的投资建议或证券买卖要约。模拟结果不代表未来表现；自动学习也不能消除模型风险、数据偏差、滑点、流动性或监管风险。金融市场有风险，投资需独立思考与严谨决策。*

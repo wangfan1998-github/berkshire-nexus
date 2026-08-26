@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import json
+import os
 import sys
+from pathlib import Path
 from typing import List
 
+from .agent.cycle import PaperTradingAgent
 from .core.orchestrator import OmniAlphaOrchestrator, ComprehensiveAnalysisReport
+from .learning.features import FEATURE_NAMES
+from .learning.model import TrainingObservation, train_candidate
+from .learning.registry import ChampionChallengerRegistry
+from .learning.store import LearningStore
+from .trading.binance_stocks import BinanceStocksClient
 
 
 # ANSI Color Codes
@@ -110,6 +120,42 @@ def print_comparison_table(reports: List[ComprehensiveAnalysisReport]):
     print(f"{DIM}" + "─" * 128 + f"{RESET}\n")
 
 
+def print_paper_cycle(result):
+    print(f"\n{BOLD}{CYAN}BerkshireNexus Paper Agent Cycle{RESET}")
+    print(f"Equity: ${result.portfolio_before.equity:,.2f} → ${result.portfolio_after.equity:,.2f}")
+    print(f"Orders: {len(result.orders)} | Observations: {result.total_observations} | Champion: {result.champion_version or 'base analysis only'}")
+    for decision, execution in zip(result.risk_decisions, result.executions):
+        status_color = GREEN if execution.status == "FILLED" else RED
+        reason = execution.message or "; ".join(decision.reasons)
+        print(
+            f"  {status_color}{execution.status:<11}{RESET} "
+            f"{execution.side:<4} {execution.ticker:<8} "
+            f"qty={execution.filled_quantity:.6f} px=${execution.average_price:.2f} "
+            f"{DIM}{reason}{RESET}"
+        )
+    if result.promotion:
+        print(f"Model gate: {result.promotion.reason}")
+    print(f"Audit: {result.audit_path}\n")
+
+
+def load_observations_csv(path: Path) -> List[TrainingObservation]:
+    required = {"timestamp", "ticker", "forward_return", *FEATURE_NAMES}
+    observations: List[TrainingObservation] = []
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        missing = required.difference(reader.fieldnames or [])
+        if missing:
+            raise ValueError(f"observation CSV is missing columns: {', '.join(sorted(missing))}")
+        for row in reader:
+            observations.append(TrainingObservation(
+                timestamp=row["timestamp"],
+                ticker=row["ticker"].upper(),
+                features={name: float(row[name]) for name in FEATURE_NAMES},
+                forward_return=float(row["forward_return"]),
+            ))
+    return observations
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="berkshire-nexus",
@@ -125,21 +171,115 @@ def main():
     compare_parser = subparsers.add_parser("compare", help="Cross-sectional comparative ranking of multiple tickers")
     compare_parser.add_argument("tickers", nargs="+", help="List of stock tickers (e.g. SOFI APP UBER ADBE)")
 
+    paper_parser = subparsers.add_parser("paper", help="Run one audited autonomous paper-trading cycle")
+    paper_parser.add_argument("tickers", nargs="+", help="US stock universe for this cycle")
+    paper_parser.add_argument("--cash", type=float, default=100_000.0, help="Initial cash for a new paper account")
+    paper_parser.add_argument("--state-dir", default=".berkshire-nexus", help="Local state and audit directory")
+    paper_parser.add_argument("--horizon-days", type=int, default=20, help="Calendar-day label horizon")
+    paper_parser.add_argument("--minimum-training-samples", type=int, default=30)
+    paper_parser.add_argument(
+        "--auto-promote-paper",
+        action="store_true",
+        help="Allow a challenger which passes validation gates to become the paper champion",
+    )
+    paper_parser.add_argument("--json", action="store_true", help="Print machine-readable cycle JSON")
+
+    learn_parser = subparsers.add_parser("learn", help="Import labeled observations and train a challenger")
+    learn_parser.add_argument("csv", type=Path, help="CSV with timestamp, ticker, forward_return, and feature columns")
+    learn_parser.add_argument("--state-dir", default=".berkshire-nexus")
+    learn_parser.add_argument("--minimum-training-samples", type=int, default=30)
+    learn_parser.add_argument("--auto-promote-paper", action="store_true")
+
+    subparsers.add_parser("model-status", help="Show champion and challenger model metadata").add_argument(
+        "--state-dir", default=".berkshire-nexus"
+    )
+    subparsers.add_parser("model-promote", help="Explicitly promote the current challenger").add_argument(
+        "--state-dir", default=".berkshire-nexus"
+    )
+
+    preflight_parser = subparsers.add_parser(
+        "binance-preflight",
+        help="Read-only Binance Stocks symbol/quote/API connectivity check",
+    )
+    preflight_parser.add_argument("tickers", nargs="+", help="Tickers to verify")
+
     args = parser.parse_args()
 
     if not args.command:
         parser.print_help()
         sys.exit(0)
 
-    orchestrator = OmniAlphaOrchestrator()
-
     if args.command == "analyze":
+        orchestrator = OmniAlphaOrchestrator()
         report = orchestrator.analyze_single(args.ticker)
         print_single_report(report)
 
     elif args.command == "compare":
+        orchestrator = OmniAlphaOrchestrator()
         reports = orchestrator.compare_multiple(args.tickers)
         print_comparison_table(reports)
+
+    elif args.command == "paper":
+        orchestrator = OmniAlphaOrchestrator()
+        reports = orchestrator.compare_multiple(args.tickers)
+        agent = PaperTradingAgent(
+            args.state_dir,
+            initial_cash=args.cash,
+            learning_horizon_days=args.horizon_days,
+            minimum_training_samples=args.minimum_training_samples,
+            allow_automatic_paper_promotion=args.auto_promote_paper,
+        )
+        result = agent.run(reports)
+        if args.json:
+            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print_comparison_table(reports)
+            print_paper_cycle(result)
+
+    elif args.command == "learn":
+        observations = load_observations_csv(args.csv)
+        state_dir = Path(args.state_dir)
+        store = LearningStore(state_dir / "learning.json")
+        added = store.add_observations(observations)
+        registry = ChampionChallengerRegistry(state_dir / "model_registry.json")
+        champion = registry.champion()
+        run = train_candidate(
+            store.observations(),
+            champion.model if champion else None,
+            minimum_samples=args.minimum_training_samples,
+        )
+        if run is None:
+            print(f"Imported {added} observations; not enough samples to train a candidate.")
+        else:
+            decision = registry.consider(
+                run,
+                allow_automatic_paper_promotion=args.auto_promote_paper,
+            )
+            print(json.dumps({
+                "imported": added,
+                "candidate": run.candidate.to_dict(),
+                "decision": decision.__dict__,
+            }, ensure_ascii=False, indent=2, sort_keys=True))
+
+    elif args.command == "model-status":
+        registry = ChampionChallengerRegistry(Path(args.state_dir) / "model_registry.json")
+        champion = registry.champion()
+        challenger = registry.challenger()
+        print(json.dumps({
+            "champion": champion.to_dict() if champion else None,
+            "challenger": challenger.to_dict() if challenger else None,
+        }, ensure_ascii=False, indent=2, sort_keys=True))
+
+    elif args.command == "model-promote":
+        registry = ChampionChallengerRegistry(Path(args.state_dir) / "model_registry.json")
+        print(json.dumps(registry.promote_challenger().__dict__, ensure_ascii=False, indent=2, sort_keys=True))
+
+    elif args.command == "binance-preflight":
+        api_key = os.environ.get("BINANCE_API_KEY", "")
+        if not api_key:
+            parser.error("BINANCE_API_KEY must be set for Binance Stocks market-data endpoints")
+        client = BinanceStocksClient(api_key=api_key)
+        print(json.dumps(client.preflight(args.tickers), ensure_ascii=False, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

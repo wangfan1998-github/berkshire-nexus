@@ -32,7 +32,45 @@ In the real world, investing is a high-stakes game of trade-offs, anti-bias veri
 
 ## 🚀 Quick Start (Zero External Dependencies)
 
-Run instantly with standard Python 3.7+ (no `pip install` required):
+Run with standard Python 3.9+ (no `pip install` required):
+
+### Audited adaptive paper-trading agent
+
+The original research engine now feeds a bounded, testable trading loop:
+
+```text
+research → bounded features → adaptive return model → champion/challenger gate
+         → target weights → deterministic risk → persistent paper broker
+```
+
+Run one cycle:
+
+```bash
+python3 -m src.cli paper AAPL MSFT NVDA --cash 100000
+```
+
+State is persisted under `.berkshire-nexus/`, including the portfolio, append-only executions, delayed learning labels, model registry, and a full JSON audit for every cycle. Snapshots use a 20-calendar-day label horizon by default. A challenger is not trained until 30 observations exist, and automatic promotion is off unless `--auto-promote-paper` is explicitly supplied.
+
+```bash
+python3 -m src.cli model-status
+python3 -m src.cli model-promote
+python3 -m src.cli learn examples/learning_observations_template.csv
+```
+
+The CSV template contains normalized `0..1` features and decimal forward returns. Its two example rows document the format only; they are not enough to train a model. Imported features must be point-in-time correct.
+
+### Binance Stocks boundary
+
+The project uses Binance's native `/sapi/v1/equity/*` API rather than CCXT. A read-only symbol/quote preflight is available:
+
+```bash
+export BINANCE_API_KEY='your-read-only-key'
+python3 -m src.cli binance-preflight AAPL MSFT
+```
+
+There is intentionally no one-click live CLI yet. Safe autonomous execution still requires authoritative Binance cash/holding snapshots, order reconciliation, and restart recovery. The isolated `BinanceStocksClient` can build signed orders, but `place_order()` requires both `allow_live_orders=True` and `BERKSHIRE_NEXUS_LIVE_TRADING=I_ACKNOWLEDGE_REAL_MONEY`. It always submits direct equities with `tokenize=false`.
+
+Every order must pass deterministic controls outside the learned model: a 10% position cap, 25% daily turnover cap, 1% daily-loss kill switch, no live market orders by default, and no live buys from fallback/inferred research data. Valid risk-reducing sells remain possible after a kill switch. Binance eligibility, regional, PDT, session, and disclaimer requirements still apply. No documented Stocks testnet is assumed, so local paper trading is the mandatory first stage.
 
 ### 1. Cross-Sectional Comparison (`compare`)
 
@@ -61,4 +99,4 @@ python3 -m src.cli analyze UBER
 
 ## 📜 Disclaimer
 
-*This project is for educational, research, and coding exploration purposes only. It does not constitute financial, investment, or legal advice.*
+*This project is for educational, research, and coding exploration purposes only. It does not constitute financial, investment, or legal advice. Paper results do not predict future performance, and adaptive learning does not remove data, model, execution, liquidity, or regulatory risk.*
