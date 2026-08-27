@@ -468,6 +468,17 @@ class DesktopService:
                 prices[ticker] = float(report.financials.price)
 
         portfolio = broker.live_portfolio(prices)
+        # Equity is the denominator for every position/turnover/loss limit. If a
+        # held position could not be priced, equity is understated and the
+        # planner would liquidate sound positions to reach a target weight.
+        # Refuse to submit rather than trade on a wrong denominator.
+        unpriced = list(getattr(broker, "unpriced_positions", []))
+        if unpriced and submit:
+            raise ValueError(
+                "refusing to trade: no quote available for held position(s) "
+                f"{', '.join(unpriced)}, so portfolio equity is understated"
+            )
+
         policy = self._risk_policy(risk_config or {})
         planner = AllocationPlanner()
         engine = DeterministicRiskEngine(policy)
@@ -512,6 +523,8 @@ class DesktopService:
             "portfolio": portfolio.to_dict(),
             "prices": prices,
             "venue_priced": venue_priced,
+            "unpriced_positions": unpriced,
+            "equity": portfolio.equity,
             "reports": [self._report(report) for report in reports],
             "risk_decisions": decisions,
             "executions": executions,

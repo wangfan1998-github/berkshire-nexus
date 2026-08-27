@@ -444,6 +444,62 @@ class LiveBrokerTests(unittest.TestCase):
             # A cold start must not trip the daily-loss kill switch.
             self.assertAlmostEqual(portfolio.start_of_day_equity, portfolio.equity)
 
+    def test_live_portfolio_prices_holdings_outside_the_analysis_universe(self):
+        """Every held position must be priced, not only analysed ones.
+
+        Regression: prices came solely from the analysis universe, so holdings
+        outside it were valued at 0. Equity collapsed from ~$5,000 to ~$400 and
+        the planner tried to liquidate 94% of a sound position to reach a 6%
+        target weight computed against the wrong denominator.
+        """
+
+        quote_calls = []
+
+        class PricingClient(FakeClient):
+            def latest_quote(self, symbol):
+                quote_calls.append(symbol)
+                return {"price": {"AVGO": "360.0", "QQQM": "295.0"}.get(symbol.upper(), "0")}
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = PricingClient({
+                "/sapi/v1/equity/market/exchangeInfo": {
+                    "symbols": [{"symbol": "AVGO"}, {"symbol": "QQQM"}, {"symbol": "TSM"}]
+                },
+                "/sapi/v1/asset/get-funding-asset": [
+                    {"asset": "USDC", "free": "10", "locked": "0"},
+                    {"asset": "EQ_AVGO", "free": "1", "locked": "0"},
+                    {"asset": "EQ_QQQM", "free": "2", "locked": "0"},
+                ],
+                "/sapi/v3/asset/getUserAsset": [],
+            })
+            broker = LiveBroker(client, directory)
+            # Only TSM is in the analysis universe; it is not even held.
+            portfolio = broker.live_portfolio({"TSM": 424.0})
+
+            self.assertAlmostEqual(portfolio.prices["AVGO"], 360.0)
+            self.assertAlmostEqual(portfolio.prices["QQQM"], 295.0)
+            # 10 cash + 360 + 590 = 960, not 10.
+            self.assertAlmostEqual(portfolio.equity, 960.0)
+            self.assertEqual(broker.unpriced_positions, [])
+            self.assertEqual(sorted(quote_calls), ["AVGO", "QQQM"])
+
+    def test_unpriceable_holding_is_reported_not_treated_as_zero(self):
+        class SilentClient(FakeClient):
+            def latest_quote(self, symbol):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = SilentClient({
+                "/sapi/v1/equity/market/exchangeInfo": {"symbols": [{"symbol": "AVGO"}]},
+                "/sapi/v1/asset/get-funding-asset": [
+                    {"asset": "EQ_AVGO", "free": "1", "locked": "0"},
+                ],
+                "/sapi/v3/asset/getUserAsset": [],
+            })
+            broker = LiveBroker(client, directory)
+            broker.live_portfolio({})
+            self.assertEqual(broker.unpriced_positions, ["AVGO"])
+
     def test_cancel_requires_live_gate(self):
         client = FakeClient(allow_live_orders=False)
         with self.assertRaises(LiveTradingDisabledError):

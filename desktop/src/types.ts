@@ -347,6 +347,9 @@ export interface LiveCycleResult {
     prices: Record<string, number>;
   };
   prices: Record<string, number>;
+  venue_priced?: string[];
+  unpriced_positions?: string[];
+  equity?: number;
   reports: AnalysisReport[];
   risk_decisions: LiveRiskDecision[];
   executions: Execution[];

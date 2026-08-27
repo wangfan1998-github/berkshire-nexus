@@ -25,6 +25,7 @@ from .binance_stocks import (
     BinanceStocksClient,
     LiveTradingDisabledError,
     classify_place_ack,
+    merge_quote_price,
     summarise_symbol_tradability,
 )
 from .types import ExecutionReport, PortfolioSnapshot, RiskDecision
@@ -45,6 +46,8 @@ class LiveBroker:
         self.client = client
         self.state_directory = Path(state_directory)
         self.pending_path = self.state_directory / "live_pending_orders.json"
+        # Populated by live_portfolio(); holdings the venue would not quote.
+        self.unpriced_positions: List[str] = []
         self.journal_path = self.state_directory / "live_executions.jsonl"
         self.recovery_path = self.state_directory / "live_recovery.json"
 
@@ -210,7 +213,15 @@ class LiveBroker:
         return snapshot
 
     def live_portfolio(self, prices: Dict[str, float]) -> PortfolioSnapshot:
-        """Build a risk-engine-compatible snapshot from real balances."""
+        """Build a risk-engine-compatible snapshot from real balances.
+
+        Every held position must be priced, not just the ones in the analysis
+        universe. Equity is the denominator for position caps, turnover and the
+        daily-loss switch, so an unpriced holding understates equity and makes
+        the planner liquidate perfectly good positions to hit a target weight.
+        Missing prices are fetched from the venue and, when a quote is genuinely
+        unavailable, reported rather than silently treated as zero.
+        """
 
         state = self.account_state()
         quantities = {
@@ -218,7 +229,22 @@ class LiveBroker:
             for position in state.get("positions", [])
             if float(position.get("quantity", 0.0)) > 0.0
         }
-        resolved = {ticker: float(prices.get(ticker, 0.0)) for ticker in quantities}
+
+        resolved: Dict[str, float] = {}
+        unpriced: List[str] = []
+        for ticker in quantities:
+            price = float(prices.get(ticker, 0.0))
+            if price <= 0.0:
+                try:
+                    price = merge_quote_price(self.client.latest_quote(ticker))
+                except (BinanceAPIError, ValueError):
+                    price = 0.0
+            if price > 0.0:
+                resolved[ticker] = price
+            else:
+                resolved[ticker] = 0.0
+                unpriced.append(ticker)
+
         snapshot = PortfolioSnapshot(
             cash=float(state.get("cash", 0.0)),
             quantities=quantities,
@@ -228,6 +254,7 @@ class LiveBroker:
         # equity keeps the daily-loss kill switch from firing spuriously.
         snapshot.start_of_day_equity = snapshot.equity
         snapshot.trading_date = datetime.now(timezone.utc).date().isoformat()
+        self.unpriced_positions = unpriced
         return snapshot
 
     def cancel_all_open(self, symbol: Optional[str] = None) -> Dict[str, Any]:

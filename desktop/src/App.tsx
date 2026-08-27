@@ -1239,9 +1239,13 @@ function LivePage({
           <div className="live-result">
             <div className="metric-row">
               <div><span>模式</span><strong>{cycle.mode === "live" ? "已提交实盘" : "仅预览"}</strong></div>
+              <div><span>组合权益（风控分母）</span><strong>{money.format(cycle.equity ?? 0)}</strong></div>
               <div><span>通过风控</span><strong>{cycle.approved_count} / {cycle.risk_decisions.length}</strong></div>
               <div><span>已提交</span><strong>{cycle.executions.length}</strong></div>
             </div>
+            {cycle.unpriced_positions && cycle.unpriced_positions.length > 0 && (
+              <p className="warn-note">以下持仓取不到报价，权益被低估，实盘提交已被拒绝：{cycle.unpriced_positions.join("、")}</p>
+            )}
             {cycle.blocked_reason && <p className="muted-note">未提交原因：{cycle.blocked_reason}</p>}
             {cycle.risk_decisions.length === 0 && <p className="muted-note">本轮没有产生任何目标订单。</p>}
             {cycle.risk_decisions.length > 0 && (
