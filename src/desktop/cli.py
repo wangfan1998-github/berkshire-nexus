@@ -47,6 +47,12 @@ def main() -> None:
     subparsers.add_parser("live-accept-disclaimer")
     subparsers.add_parser("verify-credentials")
 
+    screen = subparsers.add_parser("screen")
+    screen.add_argument("--segments", nargs="*", default=None)
+    screen.add_argument("--per-segment", type=int, default=6)
+    screen.add_argument("--min-market-cap", type=float, default=2e9)
+    screen.add_argument("--min-dollar-volume", type=float, default=2e7)
+
     cancel_all = subparsers.add_parser("live-cancel-all")
     cancel_all.add_argument("--symbol", default="")
 
@@ -90,6 +96,15 @@ def main() -> None:
             )
         elif args.command == "live-account":
             value = service.live_account(binance_key, binance_secret)
+        elif args.command == "screen":
+            value = service.screen_market(
+                binance_key,
+                binance_secret,
+                segments=args.segments or None,
+                per_segment=args.per_segment,
+                minimum_market_cap=args.min_market_cap,
+                minimum_dollar_volume=args.min_dollar_volume,
+            )
         elif args.command == "verify-credentials":
             value = service.verify_credentials(binance_key, binance_secret)
         elif args.command == "live-reconcile":

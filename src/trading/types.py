@@ -28,6 +28,12 @@ class OrderIntent:
     uses_fallback_data: bool
     data_is_authoritative: bool = False
     tokenize: bool = False
+    # Settlement currency. Binance defaults to USDC when omitted; sent
+    # explicitly so the order is never silently denominated in something else.
+    quote_asset: str = "USDC"
+    # Source wallet for BUY orders: CARD (funding, Binance default) or MAIN
+    # (spot). Ignored on SELL, which always settles against CARD.
+    wallet_type: str = "CARD"
     rationale: str = ""
 
     def to_dict(self) -> Dict[str, object]:

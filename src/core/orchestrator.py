@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 from uuid import uuid4
 from ..data.fetcher import DataFetcher, CompanyFinancials
 from .chokepoint import ChokepointAnalyzer, ChokepointResult
@@ -41,9 +41,17 @@ class OmniAlphaOrchestrator:
         self,
         research_config: Optional[ResearchConfig] = None,
         ai_api_key: str = "",
+        venue_prices: Optional[Dict[str, float]] = None,
     ):
         self.research_config = research_config or ResearchConfig()
         self.fetcher = DataFetcher()
+        # Prices from the venue the orders route to. Valuation must use the
+        # price an order will actually fill at: Binance's tokenized-equity quote
+        # has diverged from the third-party close by ~8% intraday, which would
+        # otherwise make margin-of-safety describe a price nobody can trade.
+        self.venue_prices = {
+            str(k).upper(): float(v) for k, v in (venue_prices or {}).items() if float(v) > 0.0
+        }
         self.news_service = NewsService(self.research_config)
         self.ai_service = AIResearchService(self.research_config, ai_api_key)
         self.chokepoint_analyzer = ChokepointAnalyzer()
@@ -55,6 +63,29 @@ class OmniAlphaOrchestrator:
     def analyze_single(self, ticker: str) -> ComprehensiveAnalysisReport:
         # 1. Fetch data
         fin = self.fetcher.fetch_quote(ticker)
+
+        # 1b. Override with the execution venue's price before ANY scoring, so
+        # valuation, quant factors and risk all reason about the tradable price.
+        venue_price = self.venue_prices.get(fin.ticker.upper(), 0.0)
+        if venue_price > 0.0:
+            reference_close = fin.previous_close or fin.price
+            fin.price = venue_price
+            fin.is_authoritative = True
+            if fin.eps and fin.eps > 0.0:
+                fin.pe = venue_price / fin.eps
+            if reference_close > 0.0:
+                fin.price_change_pct = (venue_price / reference_close - 1.0) * 100.0
+            fin.data_source = f"binance-equity-quote+{fin.data_source}"
+            fin.source_trace = list(fin.source_trace) + [{
+                "provider": "binance-equity-quote",
+                "kind": "venue-price-override",
+                "status": "ok",
+                "as_of_utc": datetime.now(timezone.utc).isoformat(),
+                "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+                "latency_ms": 0,
+                "fields": ["price", "pe", "price_change_pct"],
+                "message": "execution-venue price used for valuation and sizing",
+            }]
 
         # 2. Run modules in parallel pipeline
         chokepoint = self.chokepoint_analyzer.analyze(fin)

@@ -582,6 +582,47 @@ class BinanceStocksClient:
     # Trading (signed, gated)
     # ------------------------------------------------------------------
 
+    def redeem_flexible(
+        self,
+        product_id: str,
+        *,
+        amount: Optional[float] = None,
+        redeem_all: bool = False,
+        destination: str = "SPOT",
+    ) -> Dict[str, Any]:
+        """Redeem a Simple Earn flexible position back to a spendable wallet.
+
+        Stock BUY orders draw on ``CARD`` (default) or ``MAIN``; balances still
+        subscribed to Earn are not spendable, so funding a purchase from savings
+        requires an explicit redemption first. Binance does not auto-redeem.
+
+        ``destination`` accepts ``SPOT`` or ``FUND`` (funding/CARD wallet).
+        """
+
+        params: Dict[str, object] = {
+            "productId": product_id,
+            "destAccount": destination.upper(),
+        }
+        if redeem_all:
+            params["redeemAll"] = "true"
+        elif amount is not None and amount > 0.0:
+            params["amount"] = self._decimal(amount)
+        else:
+            raise ValueError("redeem requires either redeem_all=True or a positive amount")
+        return self._request(
+            "POST", "/sapi/v1/simple-earn/flexible/redeem", params=params, signed=True
+        )
+
+    def spendable_balance(self, asset: str, wallet: str = "CARD") -> float:
+        """Free balance of ``asset`` in the wallet an order would actually debit."""
+
+        target = asset.upper()
+        rows = self.funding_assets() if wallet.upper() == "CARD" else self.spot_assets()
+        for row in rows:
+            if str(_first(row, "asset", "coin", default="")).upper() == target:
+                return _as_float(_first(row, "free", "available"))
+        return 0.0
+
     def place_order(self, order: OrderIntent) -> Dict[str, object]:
         self._assert_live_enabled()
         if not self.api_secret:
@@ -595,6 +636,13 @@ class BinanceStocksClient:
             "orderType": order.order_type,
             "clientOrderId": order.client_order_id,
         }
+        # Sent explicitly rather than relying on the server default, so the
+        # settlement currency and funding wallet are always auditable.
+        quote_asset = (getattr(order, "quote_asset", "") or "USDC").upper()
+        params["quoteAsset"] = quote_asset
+        if order.side == "BUY":
+            # walletType applies to BUY only; SELL always settles to CARD.
+            params["walletType"] = (getattr(order, "wallet_type", "") or "CARD").upper()
         if self.send_tokenize_flag:
             params["tokenize"] = "false"
         if order.order_type == "LIMIT":

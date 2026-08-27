@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 from ..agent.cycle import PaperTradingAgent
 from ..core.orchestrator import ComprehensiveAnalysisReport, OmniAlphaOrchestrator
 from ..learning.registry import ChampionChallengerRegistry
+from ..data.screener import MarketScreener, segment_catalogue
 from ..research.ai import AIResearchService
 from ..research.config import ResearchConfig
 from ..trading.binance_stocks import (
@@ -386,6 +387,122 @@ class DesktopService:
             "checks": checks,
         })
 
+    def screen_market(
+        self,
+        api_key: str,
+        api_secret: str = "",
+        *,
+        segments: Optional[Sequence[str]] = None,
+        per_segment: int = 6,
+        minimum_market_cap: float = 2e9,
+        minimum_dollar_volume: float = 2e7,
+        include_holdings: bool = True,
+    ) -> Dict[str, Any]:
+        """Screen the whole US market for AI-supply-chain candidates.
+
+        Replaces a hand-maintained ticker list: candidates are discovered from
+        ~7,100 listings, restricted to what Binance can actually trade, then
+        ranked by liquidity within each supply-chain segment.
+        """
+
+        if not api_key:
+            raise ValueError("Binance API Key is not configured")
+        client = BinanceStocksClient(api_key=api_key, api_secret=api_secret)
+        try:
+            tradable = set(client.tradable_symbols())
+        except (BinanceAPIError, ValueError):
+            tradable = set()
+
+        holdings: List[str] = []
+        if include_holdings and api_secret:
+            try:
+                snapshot = client.account_snapshot()
+                holdings = [
+                    str(position["ticker"])
+                    for position in snapshot.get("positions", [])
+                    if float(position.get("quantity", 0.0)) > 0.0
+                ]
+            except (BinanceAPIError, ValueError):
+                holdings = []
+
+        result = MarketScreener().screen(
+            tradable=tradable or None,
+            segments=segments,
+            per_segment=per_segment,
+            minimum_market_cap=minimum_market_cap,
+            minimum_dollar_volume=minimum_dollar_volume,
+            include_tickers=holdings,
+        )
+        payload = result.to_dict()
+        payload["held_tickers"] = holdings
+        payload["segment_catalogue"] = segment_catalogue()
+        return json_safe(payload)
+
+    def live_funding(
+        self,
+        api_key: str,
+        api_secret: str,
+        *,
+        quote_asset: str = "USDC",
+    ) -> Dict[str, Any]:
+        """Where the buying power actually is, and what is spendable right now.
+
+        A stock BUY debits CARD (default) or MAIN. Balances subscribed to Simple
+        Earn are not spendable and Binance does not auto-redeem, so savings must
+        be redeemed before they can fund a purchase.
+        """
+
+        client = self._live_client(api_key, api_secret)
+        asset = quote_asset.upper()
+        card = client.spendable_balance(asset, "CARD")
+        main = client.spendable_balance(asset, "MAIN")
+        earn = client.earn_snapshot()
+        in_earn = 0.0
+        product_id = ""
+        redeemable = False
+        for row in earn.get("flexible", []):
+            if row.get("asset") == asset:
+                in_earn += float(row.get("amount", 0.0))
+                product_id = str(row.get("product_id", ""))
+                redeemable = bool(row.get("can_redeem", False))
+        return json_safe({
+            "quote_asset": asset,
+            "card_free": card,
+            "main_free": main,
+            "spendable_total": card + main,
+            "in_earn": in_earn,
+            "earn_product_id": product_id,
+            "earn_redeemable": redeemable,
+            "note": (
+                "BUY 默认从 CARD 扣款；理财余额需先赎回才能下单"
+                if in_earn > 0.0 and (card + main) <= 0.0 else ""
+            ),
+        })
+
+    def live_redeem_earn(
+        self,
+        api_key: str,
+        api_secret: str,
+        *,
+        product_id: str,
+        amount: Optional[float] = None,
+        redeem_all: bool = False,
+        destination: str = "FUND",
+    ) -> Dict[str, Any]:
+        """Redeem savings into a spendable wallet. Gated like other mutations."""
+
+        client = self._live_client(api_key, api_secret, allow_live_orders=True)
+        return json_safe({
+            "requested_at_utc": datetime.now(timezone.utc).isoformat(),
+            "product_id": product_id,
+            "response": client.redeem_flexible(
+                product_id,
+                amount=amount,
+                redeem_all=redeem_all,
+                destination=destination,
+            ),
+        })
+
     def live_reconcile(self, api_key: str, api_secret: str) -> Dict[str, Any]:
         """Resolve every locally tracked order against the exchange."""
 
@@ -451,13 +568,11 @@ class DesktopService:
                 "reconcile them before enabling live submission"
             )
 
-        config = ResearchConfig.from_dict(research_config or {})
-        reports = OmniAlphaOrchestrator(config, ai_api_key).compare_multiple(normalized)
-
+        # Fetch venue prices BEFORE analysis so valuation, quant factors and
+        # sizing all reason about the price an order can actually fill at.
         prices: Dict[str, float] = {}
         venue_priced: List[str] = []
-        for report in reports:
-            ticker = report.financials.ticker
+        for ticker in normalized:
             try:
                 venue_price = merge_quote_price(client.latest_quote(ticker))
             except (BinanceAPIError, ValueError):
@@ -465,19 +580,13 @@ class DesktopService:
             if venue_price > 0.0:
                 prices[ticker] = venue_price
                 venue_priced.append(ticker)
-                # The execution venue itself confirmed this price, so the record
-                # is broker-authoritative for the purpose of the live risk gate.
-                # Research fundamentals are still third-party; the gate exists to
-                # stop stale or invented *prices* reaching the market.
-                report.financials.price = venue_price
-                report.financials.is_authoritative = True
-                report.financials.data_source = (
-                    f"binance-equity-quote+{report.financials.data_source}"
-                )
-            else:
-                # Without a venue price the order would be priced off third-party
-                # data; leave is_authoritative False so the risk engine blocks it.
-                prices[ticker] = float(report.financials.price)
+
+        config = ResearchConfig.from_dict(research_config or {})
+        reports = OmniAlphaOrchestrator(
+            config, ai_api_key, venue_prices=prices
+        ).compare_multiple(normalized)
+        for report in reports:
+            prices.setdefault(report.financials.ticker, float(report.financials.price))
 
         portfolio = broker.live_portfolio(prices)
         # Equity is the denominator for every position/turnover/loss limit. If a
