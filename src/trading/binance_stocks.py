@@ -46,6 +46,60 @@ def strip_equity_prefix(asset: str) -> str:
         return value[len(EQUITY_ASSET_PREFIX):]
     return value
 
+
+def classify_wallet_asset(
+    asset: str,
+    resolution: Optional[Dict[str, Dict[str, Any]]] = None,
+    universe: Optional[Set[str]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Resolve a wallet asset to an equity ticker, or None if it is not equity.
+
+    Precedence is deliberate, strongest evidence first:
+
+    1. ``/equity/market/tokenized-assets`` — Binance's own mapping. It also
+       carries the multiplier needed to convert a token balance into shares.
+    2. ``EQ_`` prefix — the direct-equity naming convention. Trusted on its own
+       so holdings survive an exchangeInfo/tokenized-map outage.
+    3. Bare ticker present in the tradable universe.
+
+    Anything else is treated as non-equity (crypto, staked tokens, unknown
+    products) and surfaced as unclassified rather than guessed at.
+    """
+
+    value = asset.upper()
+    resolution = resolution or {}
+    universe = universe or set()
+
+    mapped = resolution.get(value)
+    if mapped:
+        return {
+            "ticker": mapped["ticker"],
+            "multiplier": mapped.get("multiplier", 1.0),
+            "multiplier_valid": mapped.get("multiplier_valid", True),
+            "tokenized": True,
+            "resolved_by": "tokenized-assets",
+        }
+
+    if value.startswith(EQUITY_ASSET_PREFIX):
+        return {
+            "ticker": value[len(EQUITY_ASSET_PREFIX):],
+            "multiplier": 1.0,
+            "multiplier_valid": True,
+            "tokenized": False,
+            "resolved_by": "eq-prefix",
+        }
+
+    if value in universe:
+        return {
+            "ticker": value,
+            "multiplier": 1.0,
+            "multiplier_valid": True,
+            "tokenized": False,
+            "resolved_by": "universe-match",
+        }
+
+    return None
+
 # Binance rate-limits /order/place at 200 req/min per UID; back off politely.
 _RETRY_STATUS = {418, 429, 500, 502, 503, 504}
 
@@ -154,8 +208,48 @@ class BinanceStocksClient:
             params={"symbol": symbol.upper()},
         )
 
-    def tokenized_assets(self) -> Dict[str, object]:
-        return self._request("GET", "/sapi/v1/equity/market/tokenized-assets")
+    def tokenized_assets(self) -> List[Dict[str, Any]]:
+        """Authoritative wallet-asset -> underlying-equity mapping.
+
+        Rows look like ``{"assetCode": "AAPLB", "underlyingEquitySymbol": "AAPL",
+        "multiplier": "1.00060391"}``. This is the only published way to resolve
+        a tokenized wallet balance to a ticker and to a share count, so it is
+        preferred over any naming heuristic.
+        """
+
+        payload = self._request("GET", "/sapi/v1/equity/market/tokenized-assets")
+        return _rows(payload, "data", "assets", "tokenizedAssets")
+
+    def asset_resolution_map(self) -> Dict[str, Dict[str, Any]]:
+        """Build wallet-asset -> {ticker, multiplier, tokenized} from the API.
+
+        Falls back to an empty map when the endpoint is unavailable; callers then
+        rely on the ``EQ_`` prefix convention alone.
+        """
+
+        resolution: Dict[str, Dict[str, Any]] = {}
+        try:
+            rows = self.tokenized_assets()
+        except (BinanceAPIError, ValueError):
+            return resolution
+        for row in rows:
+            code = str(_first(row, "assetCode", "asset", default="")).upper()
+            ticker = str(
+                _first(row, "underlyingEquitySymbol", "underlyingSymbol", "symbol", default="")
+            ).upper()
+            if not code or not ticker:
+                continue
+            multiplier = _as_float(_first(row, "multiplier"), 1.0)
+            # A stale or invalid multiplier must not silently scale a position.
+            valid = bool(_first(row, "multiplierValid", default=True))
+            resolution[code] = {
+                "ticker": ticker,
+                "multiplier": multiplier if (valid and multiplier > 0.0) else 1.0,
+                "multiplier_valid": valid,
+                "tokenized": True,
+                "name": str(_first(row, "assetName", default="")),
+            }
+        return resolution
 
     def preflight(self, symbols: Iterable[str]) -> Dict[str, object]:
         result: Dict[str, object] = {"exchange_info": {}, "quotes": {}}
@@ -263,6 +357,8 @@ class BinanceStocksClient:
             universe = set(self.tradable_symbols())
         except BinanceAPIError:
             universe = set()
+        # Authoritative mapping for tokenized holdings (AAPLB -> AAPL).
+        resolution = self.asset_resolution_map()
 
         wallets: Dict[str, List[Dict[str, Any]]] = {"CARD": [], "MAIN": []}
         errors: Dict[str, str] = {}
@@ -296,42 +392,49 @@ class BinanceStocksClient:
                     cash_by_asset[asset] = cash_by_asset.get(asset, 0.0) + total
                     continue
 
-                # Wallet rows use EQ_<TICKER>; exchangeInfo uses <TICKER>.
-                ticker = strip_equity_prefix(asset)
-                prefixed = asset.startswith(EQUITY_ASSET_PREFIX)
-                # An EQ_ prefix is itself proof of an equity holding, so trust it
-                # even when the universe lookup is unavailable. Bare assets still
-                # need to match the universe or they are crypto, not stock.
-                is_equity = prefixed or (bool(universe) and ticker in universe)
-                if not is_equity:
+                resolved = classify_wallet_asset(asset, resolution, universe)
+                if resolved is None:
                     unclassified.append({
                         "asset": asset,
                         "wallet": wallet,
                         "total": total,
                         "reason": (
-                            "not in equity universe" if universe
-                            else "equity universe unavailable"
+                            "not an equity or tokenized-equity asset" if universe or resolution
+                            else "equity universe and tokenized map unavailable"
                         ),
                     })
                     continue
 
+                ticker = resolved["ticker"]
+                multiplier = float(resolved["multiplier"])
                 entry = positions.setdefault(
                     ticker,
                     {
                         "ticker": ticker,
-                        "wallet_asset": asset,
+                        "wallet_assets": [],
                         "quantity": 0.0,
                         "free": 0.0,
                         "locked": 0.0,
                         "wallets": [],
+                        "tokenized": False,
+                        "multiplier": 1.0,
                         "tradable": ticker in universe if universe else None,
+                        "resolved_by": resolved["resolved_by"],
                     },
                 )
-                entry["quantity"] += total
-                entry["free"] += free
-                entry["locked"] += locked
+                # Tokenized balances are share-equivalent only after scaling.
+                entry["quantity"] += total * multiplier
+                entry["free"] += free * multiplier
+                entry["locked"] += locked * multiplier
+                if asset not in entry["wallet_assets"]:
+                    entry["wallet_assets"].append(asset)
                 if wallet not in entry["wallets"]:
                     entry["wallets"].append(wallet)
+                if resolved["tokenized"]:
+                    entry["tokenized"] = True
+                    entry["multiplier"] = multiplier
+                    if not resolved.get("multiplier_valid", True):
+                        entry["multiplier_stale"] = True
 
         return {
             "cash_by_asset": cash_by_asset,
@@ -339,6 +442,7 @@ class BinanceStocksClient:
             "positions": sorted(positions.values(), key=lambda item: item["ticker"]),
             "unclassified_assets": unclassified,
             "equity_universe_size": len(universe),
+            "tokenized_map_size": len(resolution),
             "wallet_errors": errors,
         }
 

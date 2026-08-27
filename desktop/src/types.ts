@@ -252,7 +252,10 @@ export const LIVE_ACKNOWLEDGEMENT = "I_ACKNOWLEDGE_REAL_MONEY";
 
 export interface LivePosition {
   ticker: string;
-  wallet_asset?: string;
+  wallet_assets?: string[];
+  tokenized?: boolean;
+  multiplier?: number;
+  resolved_by?: string;
   quantity: number;
   free: number;
   locked: number;

@@ -263,6 +263,7 @@ class DesktopService:
             "pending_local_orders": broker.has_unresolved_orders(),
             "unclassified_assets": account.get("unclassified_assets", []),
             "equity_universe_size": account.get("equity_universe_size", 0),
+            "tokenized_map_size": account.get("tokenized_map_size", 0),
             "wallet_errors": account.get("wallet_errors", {}),
             "quote_errors": quote_errors,
         })

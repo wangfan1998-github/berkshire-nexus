@@ -1164,7 +1164,7 @@ function LivePage({
                   <tbody>
                     {account.positions.map((position) => (
                       <tr key={position.ticker}>
-                        <td className="mono">{position.ticker}</td>
+                        <td className="mono">{position.ticker}{position.tokenized ? <span className="muted"> ·b</span> : null}</td>
                         <td>{position.quantity.toFixed(6)}</td>
                         <td>{position.price > 0 ? money.format(position.price) : "—"}</td>
                         <td>{position.market_value > 0 ? money.format(position.market_value) : "—"}</td>

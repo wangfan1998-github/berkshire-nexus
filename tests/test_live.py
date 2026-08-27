@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.trading.binance_stocks import (
+    classify_wallet_asset,
     LIVE_ACKNOWLEDGEMENT,
     BinanceAPIError,
     BinanceStocksClient,
@@ -45,6 +46,135 @@ class FakeClient(BinanceStocksClient):
         return value
 
 
+class AssetClassificationTests(unittest.TestCase):
+    """Wallet-asset -> ticker resolution must be account-agnostic."""
+
+    RESOLUTION = {
+        "AAPLB": {"ticker": "AAPL", "multiplier": 1.00060391, "multiplier_valid": True},
+        "MUB": {"ticker": "MU", "multiplier": 1.00010751, "multiplier_valid": True},
+    }
+    UNIVERSE = {"AAPL", "MU", "MUB", "GOOGL", "U"}
+
+    def test_tokenized_map_outranks_a_universe_name_collision(self):
+        """MUB is Micron tokenized, and also a real ETF ticker.
+
+        Without the API mapping taking precedence, a tokenized Micron holding
+        would be booked as the MUB ETF at the wrong price.
+        """
+
+        resolved = classify_wallet_asset("MUB", self.RESOLUTION, self.UNIVERSE)
+        self.assertEqual(resolved["ticker"], "MU")
+        self.assertEqual(resolved["resolved_by"], "tokenized-assets")
+        self.assertTrue(resolved["tokenized"])
+
+    def test_tokenized_asset_resolves_via_api_not_a_suffix_guess(self):
+        resolved = classify_wallet_asset("AAPLB", self.RESOLUTION, self.UNIVERSE)
+        self.assertEqual(resolved["ticker"], "AAPL")
+        self.assertAlmostEqual(resolved["multiplier"], 1.00060391)
+
+    def test_eq_prefix_resolves_without_any_api_data(self):
+        resolved = classify_wallet_asset("EQ_GOOGL", {}, set())
+        self.assertEqual(resolved["ticker"], "GOOGL")
+        self.assertEqual(resolved["resolved_by"], "eq-prefix")
+
+    def test_bare_ticker_needs_the_universe(self):
+        self.assertIsNone(classify_wallet_asset("U", {}, set()))
+        self.assertEqual(
+            classify_wallet_asset("U", {}, self.UNIVERSE)["resolved_by"], "universe-match"
+        )
+
+    def test_crypto_is_never_classified_as_equity(self):
+        for asset in ("BTC", "ETH", "SENT", "SOL"):
+            self.assertIsNone(classify_wallet_asset(asset, self.RESOLUTION, self.UNIVERSE))
+
+    def test_unknown_suffix_b_asset_is_not_guessed(self):
+        """A B-suffixed asset absent from the map must not be assumed tokenized."""
+
+        self.assertIsNone(classify_wallet_asset("FOOB", {}, {"FOO"}))
+
+
+class TokenizedPositionTests(unittest.TestCase):
+    def test_tokenized_balance_is_scaled_to_share_equivalent(self):
+        client = FakeClient({
+            "/sapi/v1/equity/market/exchangeInfo": {"symbols": [{"symbol": "AAPL"}]},
+            "/sapi/v1/equity/market/tokenized-assets": [
+                {
+                    "assetCode": "AAPLB",
+                    "underlyingEquitySymbol": "AAPL",
+                    "multiplier": "2",
+                    "multiplierValid": True,
+                }
+            ],
+            "/sapi/v1/asset/get-funding-asset": [
+                {"asset": "AAPLB", "free": "3", "locked": "0"},
+            ],
+            "/sapi/v3/asset/getUserAsset": [],
+        })
+        snapshot = client.account_snapshot()
+        position = snapshot["positions"][0]
+        self.assertEqual(position["ticker"], "AAPL")
+        # 3 tokens x multiplier 2 = 6 share-equivalents.
+        self.assertAlmostEqual(position["quantity"], 6.0)
+        self.assertTrue(position["tokenized"])
+
+    def test_invalid_multiplier_falls_back_to_one(self):
+        """A stale multiplier must not silently scale a real position."""
+
+        client = FakeClient({
+            "/sapi/v1/equity/market/exchangeInfo": {"symbols": [{"symbol": "AAPL"}]},
+            "/sapi/v1/equity/market/tokenized-assets": [
+                {
+                    "assetCode": "AAPLB",
+                    "underlyingEquitySymbol": "AAPL",
+                    "multiplier": "7",
+                    "multiplierValid": False,
+                }
+            ],
+            "/sapi/v1/asset/get-funding-asset": [
+                {"asset": "AAPLB", "free": "3", "locked": "0"},
+            ],
+            "/sapi/v3/asset/getUserAsset": [],
+        })
+        position = client.account_snapshot()["positions"][0]
+        self.assertAlmostEqual(position["quantity"], 3.0)
+
+    def test_direct_and_tokenized_holdings_merge_into_one_ticker(self):
+        client = FakeClient({
+            "/sapi/v1/equity/market/exchangeInfo": {"symbols": [{"symbol": "AAPL"}]},
+            "/sapi/v1/equity/market/tokenized-assets": [
+                {
+                    "assetCode": "AAPLB",
+                    "underlyingEquitySymbol": "AAPL",
+                    "multiplier": "1",
+                    "multiplierValid": True,
+                }
+            ],
+            "/sapi/v1/asset/get-funding-asset": [
+                {"asset": "EQ_AAPL", "free": "2", "locked": "0"},
+                {"asset": "AAPLB", "free": "1", "locked": "0"},
+            ],
+            "/sapi/v3/asset/getUserAsset": [],
+        })
+        snapshot = client.account_snapshot()
+        self.assertEqual(len(snapshot["positions"]), 1)
+        position = snapshot["positions"][0]
+        self.assertAlmostEqual(position["quantity"], 3.0)
+        self.assertEqual(sorted(position["wallet_assets"]), ["AAPLB", "EQ_AAPL"])
+
+    def test_tokenized_endpoint_failure_does_not_break_direct_holdings(self):
+        client = FakeClient({
+            "/sapi/v1/equity/market/exchangeInfo": {"symbols": [{"symbol": "TSM"}]},
+            "/sapi/v1/equity/market/tokenized-assets": BinanceAPIError(-1121, "down", 400),
+            "/sapi/v1/asset/get-funding-asset": [
+                {"asset": "EQ_TSM", "free": "0.95", "locked": "0"},
+            ],
+            "/sapi/v3/asset/getUserAsset": [],
+        })
+        snapshot = client.account_snapshot()
+        self.assertEqual([p["ticker"] for p in snapshot["positions"]], ["TSM"])
+        self.assertEqual(snapshot["tokenized_map_size"], 0)
+
+
 class AccountSnapshotTests(unittest.TestCase):
     def test_eq_prefixed_wallet_assets_are_recognised_as_positions(self):
         """Wallet rows are EQ_<TICKER>; exchangeInfo returns the bare ticker.
@@ -72,8 +202,8 @@ class AccountSnapshotTests(unittest.TestCase):
         )
         self.assertEqual(snapshot["unclassified_assets"], [])
         self.assertAlmostEqual(snapshot["positions"][0]["quantity"], 0.93578113)
-        # The original wallet asset name is retained for traceability.
-        self.assertEqual(snapshot["positions"][0]["wallet_asset"], "EQ_AVGO")
+        # The originating wallet asset names are retained for traceability.
+        self.assertEqual(snapshot["positions"][0]["wallet_assets"], ["EQ_AVGO"])
 
     def test_eq_prefix_is_trusted_when_universe_lookup_fails(self):
         """An EQ_ prefix alone proves an equity holding."""
