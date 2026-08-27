@@ -27,6 +27,10 @@ ENV/
 .vscode/
 *.swp
 .DS_Store
+node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+.impeccable/review/
 
 # BerkshireNexus local trading/learning state (may contain portfolio history)
 .berkshire-nexus/

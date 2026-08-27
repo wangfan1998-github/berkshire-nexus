@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-brightgreen.svg)](https://python.org)
-[![Zero Dependency](https://img.shields.io/badge/Dependencies-Zero%20External-orange.svg)](pyproject.toml)
+[![Python Core](https://img.shields.io/badge/Python%20Core-Zero%20Dependencies-orange.svg)](pyproject.toml)
 [![Agent Skill](https://img.shields.io/badge/Agent%20Skill-SKILL.md-black)](SKILL.md)
 [![中文优先](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87%E4%BC%98%E5%85%88-red)](README.md)
 [![English](https://img.shields.io/badge/English-README__EN.md-lightgrey)](README_EN.md)
@@ -26,13 +26,46 @@ In the real world, investing is a high-stakes game of trade-offs, anti-bias veri
 4. **Graham & Buffett Owner Earnings (2-Stage DCF)**: Stripping away narrative hype, what is the true margin of safety based on free cash flows?
 5. **Hedge Fund Risk Sizing**: What is the maximum portfolio allocation cap? When is the stop-loss triggered?
 
-`BerkshireNexus` synthesizes the best ideas from top open-source projects (`serenity-skill`, `ai-berkshire`, `qlib`, `ai-hedge-fund`, `Value-Investing-Agent`) into an uncompromising, multi-perspective decision framework that outputs definitive conclusions.
+`BerkshireNexus` synthesizes the best ideas from top open-source projects (`serenity-skill`, `ai-berkshire`, `qlib`, `ai-hedge-fund`, `Value-Investing-Agent`) into an uncompromising, multi-perspective decision framework that outputs definitive conclusions. A macOS-first desktop console now joins research, the paper portfolio, a background agent, model learning, risk, Binance preflight, and audit evidence in one operating surface.
 
 ---
 
-## 🚀 Quick Start (Zero External Dependencies)
+## 🚀 Quick Start
 
-Run with standard Python 3.9+ (no `pip install` required):
+The Python core runs on standard Python 3.9+ with no `pip install`; the desktop shell uses npm and Cargo build dependencies.
+
+### macOS desktop app (recommended)
+
+The desktop application uses Tauri 2, React, and TypeScript while retaining the dependency-free Python research, learning, and risk engine. It includes the portfolio overview, research memos, paper ledger, background agent controls, champion/challenger registry, deterministic risk settings, audit viewer, and macOS Keychain-backed Binance API Key storage.
+
+Live mode is intentionally visible but locked. This release cannot submit a real order.
+
+Development requires Node.js 20+, Rust/Cargo, and Python 3.9+:
+
+```bash
+git clone git@github.com:wangfan1998-github/berkshire-nexus.git
+cd berkshire-nexus/desktop
+npm install
+npm run desktop:dev
+```
+
+Browser-only visual preview (clearly labeled demo data, no Keychain or background process):
+
+```bash
+cd desktop
+npm run dev
+```
+
+Build a distributable application:
+
+```bash
+cd desktop
+npm run desktop:build
+```
+
+On macOS, the app bundle is written to `desktop/src-tauri/target/release/bundle/macos/BerkshireNexus.app`, with a disk image under the adjacent `dmg/` directory. See [`PRODUCT.md`](PRODUCT.md) and [`DESIGN.md`](DESIGN.md) for the product and visual contracts.
+
+To configure Binance, create a read-only API Key in the official Binance website or app, then open **Settings** in BerkshireNexus and store it in macOS Keychain. Do not enable trading, futures, or withdrawal permissions, and never send the key through chat, screenshots, issues, or committed files. Account setup, identity verification, Stocks eligibility, key creation, and permissions still happen in Binance's official UI. The desktop app can store/delete the key and run a read-only preflight.
 
 ### Audited adaptive paper-trading agent
 

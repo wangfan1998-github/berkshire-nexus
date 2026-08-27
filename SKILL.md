@@ -15,6 +15,21 @@ An institutional-grade investment research skill for Claude Code and Codex that 
 
 ## How to Run
 
+### Desktop application
+
+```bash
+cd desktop
+npm install
+npm run desktop:dev
+
+# Production bundle
+npm run desktop:build
+```
+
+The desktop shell requires Node.js 20+, Rust/Cargo, and Python 3.9+. It stores the Binance API Key in the operating-system credential store and exposes only credential status to the webview. The browser-only `npm run dev` path uses labeled demonstration data and cannot access Keychain or manage the persistent Python Agent.
+
+### Python CLI
+
 ```bash
 # Analyze a single stock ticker
 python3 -m src.cli analyze <TICKER>
@@ -47,6 +62,7 @@ python3 -m src.cli binance-preflight <TICKER_1> <TICKER_2> ...
 - Live order construction requires both the explicit client flag and the real-money acknowledgement environment variable.
 - This release does not expose live autonomous execution because authoritative account reconciliation is not implemented.
 - Model auto-promotion is paper-only and opt-in; otherwise require explicit operator promotion.
+- The desktop Live selector must remain locked until authoritative Binance cash/holdings, restart recovery, and order reconciliation are implemented and tested.
 
 ## Supported Universe
 - Any US stock ticker (e.g. `TSM`, `UBER`, `APP`, `ADBE`, `SOFI`, `GOOGL`, `AVGO`, `NVDA`, `AAPL`, `MSFT`)

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="BerkshireNexus orbit mark">
+  <rect width="512" height="512" rx="112" fill="#16221b"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#dce6d5" stroke-width="18"/>
+  <path d="M104 286c54-104 166-148 304-92" fill="none" stroke="#74a485" stroke-width="30" stroke-linecap="round"/>
+  <circle cx="381" cy="197" r="25" fill="#e0b75d"/>
+  <path d="M184 163v187m0-187h83c51 0 78 27 78 66 0 28-14 48-39 58l54 63h-56l-48-56h-27v56h-45m45-143h35c22 0 34-10 34-27s-12-26-34-26h-35v53z" fill="#f4f1e8"/>
+</svg>

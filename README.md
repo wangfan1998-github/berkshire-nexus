@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-brightgreen.svg)](https://python.org)
-[![Zero Dependency](https://img.shields.io/badge/Dependencies-Zero%20External-orange.svg)](pyproject.toml)
+[![Python Core](https://img.shields.io/badge/Python%20Core-Zero%20Dependencies-orange.svg)](pyproject.toml)
 [![Agent Skill](https://img.shields.io/badge/Agent%20Skill-SKILL.md-black)](SKILL.md)
 [![中文优先](https://img.shields.io/badge/README-%E4%B8%AD%E6%96%87%E4%BC%98%E5%85%88-red)](README.md)
 [![English](https://img.shields.io/badge/English-README__EN.md-lightgrey)](README_EN.md)
@@ -26,7 +26,7 @@
 4. **格雷厄姆与巴菲特所有者收益（Owner Earnings DCF）**：扣掉虚高的估值泡沫，真实的自由现金流安全边际有多少？
 5. **对冲基金风控纪律**：如果买，单一个股仓位上限是多少？什么时候必须止损一票否决？
 
-`BerkshireNexus` 就是为了解决这个问题而诞生的。它吸收并提炼了 GitHub 上最顶尖的投研项目之精髓（`serenity-skill`、`ai-berkshire`、`qlib`、`ai-hedge-fund`、`Value-Investing-Agent`），构建出一套**强制输出明确结论、多视角激烈对抗、量化数据交叉印证**的现代化投研决策体系。
+`BerkshireNexus` 就是为了解决这个问题而诞生的。它吸收并提炼了 GitHub 上最顶尖的投研项目之精髓（`serenity-skill`、`ai-berkshire`、`qlib`、`ai-hedge-fund`、`Value-Investing-Agent`），构建出一套**强制输出明确结论、多视角激烈对抗、量化数据交叉印证**的现代化投研决策体系。现在它也提供一个 macOS 优先的桌面操作台，把研究、模拟组合、后台 Agent、模型学习、风控、Binance 预检和审计记录放在同一条证据链中。
 
 ---
 
@@ -65,9 +65,56 @@
 
 ## 🚀 极速上手 (Quick Start)
 
-本项目采用 **零外部依赖（Zero Dependency）** 设计，无需繁琐的 `pip install` 环境配置，克隆后在 Python 3.9+ 终端即可运行。
+Python 核心采用 **零外部依赖（Zero Dependency）** 设计，无需繁琐的 `pip install`；桌面壳层使用 npm 与 Cargo 管理构建依赖。
 
-### 0. 自动学习模拟交易 Agent（推荐从这里开始）
+### 0. macOS 桌面 App（推荐）
+
+桌面端使用 **Tauri 2 + React + TypeScript**，保留现有 Python 研究/学习/风控引擎。它不是网页套壳式行情看板，而是一个本地优先的交易研究操作台：
+
+- 总览研究 → 风控 → 模拟成交 → 学习反馈的完整证据链；
+- 多股票研究备忘录、Paper 组合与模拟成交账本；
+- 可启停的后台 Paper Agent，关闭主窗口后驻留系统托盘；
+- Champion / Challenger 学习状态与人工晋升；
+- 只能收紧、不能放宽默认值的确定性风控设置；
+- macOS Keychain 保存 Binance API Key，并在 App 内做只读预检；
+- 每轮周期的本地审计记录；
+- Live 模式明确锁定，当前版本不会提交真实订单。
+
+开发运行需要 Node.js 20+、Rust（Cargo）和 Python 3.9+：
+
+```bash
+git clone git@github.com:wangfan1998-github/berkshire-nexus.git
+cd berkshire-nexus/desktop
+npm install
+npm run desktop:dev
+```
+
+只预览界面（浏览器中会明确显示“演示数据”，不能访问 Keychain 或后台进程）：
+
+```bash
+cd desktop
+npm run dev
+```
+
+构建可安装的桌面应用：
+
+```bash
+cd desktop
+npm run desktop:build
+```
+
+macOS 构建产物位于 `desktop/src-tauri/target/release/bundle/macos/BerkshireNexus.app`，磁盘镜像位于相邻的 `dmg/` 目录。首次从源码运行时，桌面端会自动定位仓库中的 Python 引擎；正式 `.app` 会把 `src/` 作为只读资源打包进去。产品与视觉约束见 [`PRODUCT.md`](PRODUCT.md) 和 [`DESIGN.md`](DESIGN.md)。
+
+#### 在 App 内配置 Binance API Key
+
+1. 在 Binance 网页或官方 App 登录，进入个人资料 → **API 管理**，创建新 API Key 并完成身份验证；
+2. 只启用读取权限，不要启用交易、合约或提现；有条件时配置 IP 白名单；
+3. 复制 **API Key**，打开 BerkshireNexus → **设置**，粘贴后选择“存入钥匙串”；
+4. 运行“只读连通性检查”。本版本不需要 API Secret，也不会开放真实下单。
+
+不要把 API Key 发到聊天、GitHub Issue、截图或提交到 `.env`。Key 保存到 macOS Keychain；前端只读取“是否已配置”，无法回显原文。开户、身份验证、Stocks 资格、API Key 创建与权限设置仍需在 Binance 官方网页或 App 完成。
+
+### 1. 命令行自动学习模拟交易 Agent
 
 新版在原有 BerkshireNexus 投研框架之上增加了一个可审计闭环：
 
@@ -135,7 +182,7 @@ python3 -m src.cli binance-preflight AAPL MSFT
 
 Binance Stocks 的账户资格、地区限制、PDT、交易时段和免责声明要求仍由 Binance 与当地法规决定。官方没有文档化的 Stocks 测试网，因此本项目把本地模拟盘作为上线前必经阶段。
 
-### 1. 多股票横截面横向 PK 排序 (`compare`)
+### 2. 多股票横截面横向 PK 排序 (`compare`)
 
 输入任意多只股票代码，框架会自动调用多因子模型与大师委员会进行综合打分与排序：
 
@@ -161,7 +208,7 @@ Rank  Ticker   Company Name             Price (P/E)      Chokepoint      Masters
 
 ---
 
-### 2. 单股票全维度透视决策备忘录 (`analyze`)
+### 3. 单股票全维度透视决策备忘录 (`analyze`)
 
 ```bash
 python3 -m src.cli analyze UBER
