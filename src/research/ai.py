@@ -101,6 +101,47 @@ class AIResearchService:
                 latency_ms=int((time.monotonic() - started) * 1000),
             )
 
+    def synthesize_briefing(
+        self,
+        evidence: Dict[str, Any],
+        allowed_citations: Any = None,
+    ) -> Dict[str, Any]:
+        """Free-form briefing synthesis over pre-assembled evidence.
+
+        Separate from :meth:`synthesize`, which is per-ticker and schema-bound.
+        Returns a plain dict so the composer can validate citations itself.
+        """
+
+        from .briefing import BRIEFING_PROMPT, BRIEFING_SYSTEM
+
+        if not self.config.ai_enabled:
+            return {"status": "disabled"}
+        if self.config.ai_provider in {"openai-compatible", "gemini"} and not self.api_key:
+            return {"status": "error", "error": "AI API Key 未配置"}
+
+        prompt = BRIEFING_PROMPT.format(
+            portfolio=json.dumps(evidence.get("portfolio", {}), ensure_ascii=False),
+            segments=json.dumps(evidence.get("segments", []), ensure_ascii=False),
+            ideas=json.dumps(evidence.get("ideas", []), ensure_ascii=False),
+        )
+        try:
+            if self.config.ai_provider in {"openai-compatible", "gemini"}:
+                raw, _ = self._openai_compatible(BRIEFING_SYSTEM + "\n\n" + prompt)
+            elif self.config.ai_provider == "ollama":
+                raw, _ = self._ollama(BRIEFING_SYSTEM + "\n\n" + prompt)
+            else:
+                raw, _ = self._codex_cli(prompt)
+            parsed = self._parse_json(raw)
+        except Exception as error:
+            return {"status": "error", "error": self._safe_error(error)}
+        if not isinstance(parsed, dict):
+            return {"status": "error", "error": "模型未返回 JSON 对象"}
+        return {
+            "status": "ok",
+            "market_note": parsed.get("market_note", ""),
+            "picks": parsed.get("picks", []),
+        }
+
     def test_connection(self) -> Dict[str, Any]:
         """Perform a real, minimal provider call with no market decision attached."""
 

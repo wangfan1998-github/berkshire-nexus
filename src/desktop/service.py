@@ -14,6 +14,7 @@ from ..agent.cycle import PaperTradingAgent
 from ..core.orchestrator import ComprehensiveAnalysisReport, OmniAlphaOrchestrator
 from ..learning.registry import ChampionChallengerRegistry
 from ..data.screener import MarketScreener, segment_catalogue
+from ..research.briefing import BriefingComposer
 from ..research.ai import AIResearchService
 from ..research.config import ResearchConfig
 from ..trading.binance_stocks import (
@@ -486,6 +487,70 @@ class DesktopService:
         payload = result.to_dict()
         payload["held_tickers"] = holdings
         payload["segment_catalogue"] = segment_catalogue()
+        return json_safe(payload)
+
+    def daily_briefing(
+        self,
+        api_key: str,
+        api_secret: str = "",
+        *,
+        segments: Optional[Sequence[str]] = None,
+        per_segment: int = 3,
+        research_config: Optional[Dict[str, Any]] = None,
+        ai_api_key: str = "",
+        minimum_score: float = 60.0,
+    ) -> Dict[str, Any]:
+        """AI supply-chain daily briefing: screen -> price -> analyse -> explain.
+
+        This is the read-only decision document. It never places an order; the
+        Strategy page takes its shortlist into the gated live cycle.
+        """
+
+        screened = self.screen_market(
+            api_key,
+            api_secret,
+            segments=segments,
+            per_segment=per_segment,
+        )
+        tickers = [str(item["ticker"]) for item in screened.get("shortlist", [])]
+        if not tickers:
+            raise ValueError(
+                "screener returned no candidates: "
+                + (screened.get("errors", {}).get("screener") or "unknown reason")
+            )
+
+        client = BinanceStocksClient(api_key=api_key, api_secret=api_secret)
+        # Venue prices first so valuation and momentum use the executable price.
+        prices: Dict[str, float] = {}
+        for ticker in tickers:
+            try:
+                price = merge_quote_price(client.latest_quote(ticker))
+            except (BinanceAPIError, ValueError):
+                price = 0.0
+            if price > 0.0:
+                prices[ticker] = price
+
+        config = ResearchConfig.from_dict(research_config or {})
+        reports = OmniAlphaOrchestrator(
+            config, ai_api_key, venue_prices=prices
+        ).compare_multiple(tickers)
+
+        account: Dict[str, Any] = {}
+        if api_secret:
+            try:
+                account = self.live_account(api_key, api_secret)
+            except (BinanceAPIError, ValueError):
+                account = {}
+
+        ai_service = AIResearchService(config, ai_api_key) if config.ai_enabled else None
+        briefing = BriefingComposer(ai_service).compose(
+            reports=reports,
+            screened=screened,
+            account=account,
+            minimum_score=minimum_score,
+        )
+        payload = briefing.to_dict()
+        payload["reports"] = [self._report(report) for report in reports]
         return json_safe(payload)
 
     def live_funding(

@@ -47,6 +47,12 @@ def main() -> None:
     subparsers.add_parser("live-accept-disclaimer")
     subparsers.add_parser("verify-credentials")
 
+    briefing = subparsers.add_parser("briefing")
+    briefing.add_argument("--segments", nargs="*", default=None)
+    briefing.add_argument("--per-segment", type=int, default=3)
+    briefing.add_argument("--research-config-json", default="{}")
+    briefing.add_argument("--minimum-score", type=float, default=60.0)
+
     screen = subparsers.add_parser("screen")
     screen.add_argument("--segments", nargs="*", default=None)
     screen.add_argument("--per-segment", type=int, default=6)
@@ -104,6 +110,16 @@ def main() -> None:
                 per_segment=args.per_segment,
                 minimum_market_cap=args.min_market_cap,
                 minimum_dollar_volume=args.min_dollar_volume,
+            )
+        elif args.command == "briefing":
+            value = service.daily_briefing(
+                binance_key,
+                binance_secret,
+                segments=args.segments or None,
+                per_segment=args.per_segment,
+                research_config=json.loads(args.research_config_json),
+                ai_api_key=os.environ.get("BERKSHIRE_NEXUS_AI_API_KEY", ""),
+                minimum_score=args.minimum_score,
             )
         elif args.command == "verify-credentials":
             value = service.verify_credentials(binance_key, binance_secret)
