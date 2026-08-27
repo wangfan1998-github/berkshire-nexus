@@ -15,8 +15,19 @@ _AI_PROVIDERS = frozenset({"openai-compatible", "gemini", "ollama", "codex-cli"}
 # hunting for them. Gemini's endpoint verified live: an invalid key returns
 # HTTP 400 "Please pass a valid API key", so the route exists.
 AI_PRESETS = {
+    "gateway": {
+        "label": "内部网关 (music-llm-gateway)",
+        "base_url": "https://music-llm-gateway.byted.org/v1",
+        "models": ["gemini-3.7-flash-high", "gemini-3.7-flash"],
+        "default_model": "gemini-3.7-flash-high",
+        # Verified live: the gateway answers both /v1/messages (Anthropic) and
+        # /v1/chat/completions (OpenAI). The OpenAI route is used because the
+        # Anthropic route returns a thinking block ahead of the text, which this
+        # client would have to unwrap for no benefit.
+        "note": "网关同时支持 Anthropic 与 OpenAI 协议；此处走 OpenAI 协议。Token 存入钥匙串。",
+    },
     "gemini": {
-        "label": "Google Gemini",
+        "label": "Google Gemini (官方)",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
         "default_model": "gemini-2.5-flash",
