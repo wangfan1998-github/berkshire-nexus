@@ -19,9 +19,12 @@ export const desktopBridge = {
     return structuredClone(mockSnapshot);
   },
 
-  async analyze(tickers: string[]): Promise<AnalysisReport[]> {
+  async analyzeWithSettings(tickers: string[], settings: DesktopSettings): Promise<AnalysisReport[]> {
     if (isTauri) {
-      const value = await invoke<{ reports: AnalysisReport[] }>("analyze_tickers", { tickers });
+      const value = await invoke<{ reports: AnalysisReport[] }>("analyze_tickers", {
+        tickers,
+        researchConfig: settings.research,
+      });
       return value.reports;
     }
     await wait(700);
@@ -35,6 +38,7 @@ export const desktopBridge = {
         initialCash: settings.initial_cash,
         autoPromotePaper: settings.auto_promote_paper,
         riskConfig: settings.risk,
+        researchConfig: settings.research,
       });
       return value.snapshot;
     }
@@ -46,10 +50,13 @@ export const desktopBridge = {
     if (isTauri) {
       await invoke("start_agent", {
         tickers: settings.universe,
-        intervalMinutes: settings.interval_minutes,
-        initialCash: settings.initial_cash,
-        autoPromotePaper: settings.auto_promote_paper,
-        riskConfig: settings.risk,
+        options: {
+          interval_minutes: settings.interval_minutes,
+          initial_cash: settings.initial_cash,
+          auto_promote_paper: settings.auto_promote_paper,
+          risk_config: settings.risk,
+          research_config: settings.research,
+        },
       });
       return;
     }
@@ -73,10 +80,18 @@ export const desktopBridge = {
         ...defaultSettings,
         ...stored,
         risk: { ...defaultSettings.risk, ...(stored.risk ?? {}) },
+        research: { ...defaultSettings.research, ...(stored.research ?? {}) },
       };
     }
     const stored = localStorage.getItem("berkshire-nexus-settings");
-    return stored ? { ...defaultSettings, ...JSON.parse(stored) } : structuredClone(defaultSettings);
+    if (!stored) return structuredClone(defaultSettings);
+    const parsed = JSON.parse(stored) as Partial<DesktopSettings>;
+    return {
+      ...defaultSettings,
+      ...parsed,
+      risk: { ...defaultSettings.risk, ...(parsed.risk ?? {}) },
+      research: { ...defaultSettings.research, ...(parsed.research ?? {}) },
+    };
   },
 
   async saveSettings(settings: DesktopSettings): Promise<void> {
@@ -111,5 +126,49 @@ export const desktopBridge = {
     if (isTauri) return invoke<Record<string, unknown>>("binance_preflight", { tickers });
     await wait(700);
     throw new Error("浏览器预览无法访问系统钥匙串；请在 Tauri 桌面 App 中运行连接检查。");
+  },
+
+  async aiKeyStatus(): Promise<boolean> {
+    if (isTauri) {
+      const value = await invoke<{ configured: boolean }>("ai_key_status");
+      return value.configured;
+    }
+    return false;
+  },
+
+  async saveAIKey(apiKey: string): Promise<void> {
+    if (isTauri) await invoke("save_ai_key", { apiKey });
+    else await wait();
+  },
+
+  async deleteAIKey(): Promise<void> {
+    if (isTauri) await invoke("delete_ai_key");
+    else await wait();
+  },
+
+  async testAIProvider(settings: DesktopSettings): Promise<AnalysisReport["ai_research"]> {
+    if (isTauri) {
+      return invoke<AnalysisReport["ai_research"]>("test_ai_provider", {
+        researchConfig: settings.research,
+      });
+    }
+    await wait(600);
+    return {
+      status: "ok",
+      provider: settings.research.ai_provider,
+      model: settings.research.ai_model,
+      prompt_version: "research-synthesis-v1",
+      generated_at_utc: new Date().toISOString(),
+      latency_ms: 600,
+      summary: "浏览器演示连接成功。",
+      thesis: "",
+      catalysts: [],
+      risks: [],
+      action_bias: "INSUFFICIENT_EVIDENCE",
+      confidence: 0,
+      citations: [],
+      usage: {},
+      error: null,
+    };
   },
 };

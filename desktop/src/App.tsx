@@ -5,6 +5,7 @@ import {
   ArrowRight,
   ArrowUpRight,
   Bot,
+  BrainCircuit,
   Check,
   ChevronRight,
   CircleAlert,
@@ -12,6 +13,7 @@ import {
   ClipboardList,
   FlaskConical,
   Gauge,
+  Database,
   KeyRound,
   LayoutDashboard,
   LineChart,
@@ -51,6 +53,8 @@ type BusyAction =
   | "agent"
   | "save"
   | "key"
+  | "ai-key"
+  | "ai-test"
   | "preflight"
   | "promote"
   | null;
@@ -60,9 +64,10 @@ type Toast = { id: number; tone: "success" | "error" | "info"; message: string }
 const navItems: Array<{ id: PageId; label: string; description: string; icon: typeof Activity }> = [
   { id: "overview", label: "总览", description: "今日运行面", icon: LayoutDashboard },
   { id: "research", label: "研究", description: "证据与裁决", icon: Search },
+  { id: "ai", label: "AI 投研", description: "模型与数据源", icon: BrainCircuit },
   { id: "portfolio", label: "组合", description: "模拟资产", icon: WalletCards },
   { id: "agent", label: "Agent", description: "循环与任务", icon: Bot },
-  { id: "models", label: "模型", description: "学习与晋升", icon: FlaskConical },
+  { id: "models", label: "策略学习", description: "Champion / Challenger", icon: FlaskConical },
   { id: "risk", label: "风控", description: "确定性边界", icon: ShieldCheck },
   { id: "audit", label: "审计", description: "不可变轨迹", icon: ClipboardList },
   { id: "settings", label: "设置", description: "Binance 与系统", icon: SettingsIcon },
@@ -71,9 +76,10 @@ const navItems: Array<{ id: PageId; label: string; description: string; icon: ty
 const pageMeta: Record<PageId, { eyebrow: string; title: string; intro: string }> = {
   overview: { eyebrow: "OPERATIONS / TODAY", title: "交易研究台", intro: "从证据到模拟成交，观察每一项判断如何穿过风控边界。" },
   research: { eyebrow: "RESEARCH / EVIDENCE", title: "股票研究", intro: "并行检验瓶颈、商业质量、估值、量化因子与失败条件。" },
+  ai: { eyebrow: "INTELLIGENCE / PROVIDERS", title: "AI 投研配置", intro: "把最新行情、新闻证据与可配置模型接入同一条可审计研究链。" },
   portfolio: { eyebrow: "PAPER BOOK / CAPITAL", title: "模拟组合", intro: "资本、持仓和成交使用同一套可追溯账本。" },
   agent: { eyebrow: "AUTOMATION / PAPER", title: "Agent 运行台", intro: "启动有界的研究—风控—模拟成交循环，可在系统托盘持续运行。" },
-  models: { eyebrow: "LEARNING / REGISTRY", title: "模型学习", intro: "模型只能学习收益映射；不能改写风控、执行权限或数据可信度规则。" },
+  models: { eyebrow: "LEARNING / REGISTRY", title: "策略学习", intro: "Champion / Challenger 只学习收益映射；它不是生成研究文本的大模型。" },
   risk: { eyebrow: "RISK / DETERMINISTIC", title: "风控边界", intro: "这些规则独立于模型，并且桌面端只能收紧默认安全阈值。" },
   audit: { eyebrow: "AUDIT / LEDGER", title: "审计日志", intro: "每轮分析、订单意图、风控决定和模拟成交都写入独立记录。" },
   settings: { eyebrow: "SYSTEM / CONNECTIONS", title: "系统设置", intro: "API Key 只写入 macOS 钥匙串，不进入配置文件、前端状态或日志。" },
@@ -276,7 +282,7 @@ function Overview({ snapshot, goTo }: { snapshot: AppSnapshot; goTo: (page: Page
           <SectionHeading
             index="02"
             title="最近研究裁决"
-            note="按综合分数排序；回退数据仍可用于研究和模拟，但永远不能触发实盘买入。"
+            note="按确定性综合分排序；网络研究数据和回退数据都不是 Binance 权威执行数据。"
             action={<button className="text-button" onClick={() => goTo("research")}>展开研究 <ChevronRight size={14} /></button>}
           />
           {analyses.length ? (
@@ -290,7 +296,7 @@ function Overview({ snapshot, goTo }: { snapshot: AppSnapshot; goTo: (page: Page
                   </div>
                   <strong className="mono score-value">{item.score.toFixed(1)}</strong>
                   <span className="recommendation">{cnRecommendation(item.recommendation)}</span>
-                  <StatusMark tone={item.uses_fallback_data ? "warn" : "good"}>{item.uses_fallback_data ? "回退数据" : "已验证"}</StatusMark>
+                  <StatusMark tone={item.uses_fallback_data ? "warn" : "good"}>{item.uses_fallback_data ? "回退数据" : "网络完整"}</StatusMark>
                 </div>
               ))}
             </div>
@@ -358,7 +364,7 @@ function Research({
             {busy ? "正在汇总证据" : "开始研究"}
           </button>
         </div>
-        <p>输入多个美股代码，用空格或逗号分隔。研究可以使用回退数据，但结果会明确标记可信度。</p>
+        <p>默认读取 Yahoo 最新可用行情、Nasdaq 基本面与当前新闻。每项证据都会显示来源、时间和降级状态。</p>
       </form>
 
       {!reports.length ? (
@@ -388,6 +394,16 @@ function Research({
   );
 }
 
+function verificationLabel(report: AnalysisReport) {
+  if (report.verification_level === "third-party-complete") return "第三方研究数据完整";
+  if (report.verification_level === "third-party-degraded") return "部分字段已降级";
+  return "离线回退数据";
+}
+
+function aiBias(value: AnalysisReport["ai_research"]["action_bias"]) {
+  return ({ BULLISH: "偏多", NEUTRAL: "中性", BEARISH: "偏空", INSUFFICIENT_EVIDENCE: "证据不足" } as const)[value];
+}
+
 function ResearchMemo({ report }: { report: AnalysisReport }) {
   const factors = [
     ["质量", report.quant.quality_score],
@@ -404,9 +420,9 @@ function ResearchMemo({ report }: { report: AnalysisReport }) {
           <span className="mono memo-code">{report.ticker} / {report.sector}</span>
           <h2>{report.name}</h2>
           <div className="memo-source">
-            <StatusMark tone={report.uses_fallback_data ? "warn" : "good"}>{report.uses_fallback_data ? "含回退 / 推断数据" : "数据已验证"}</StatusMark>
+            <StatusMark tone={report.verification_level === "third-party-complete" ? "good" : "warn"}>{verificationLabel(report)}</StatusMark>
             <span className="mono">{report.data_source}</span>
-            <span className="mono">截至 {formatDate(report.as_of_utc)}</span>
+            <span className="mono">行情 {formatDate(report.quote_as_of_utc)}</span>
           </div>
         </div>
         <div className="memo-verdict">
@@ -417,7 +433,7 @@ function ResearchMemo({ report }: { report: AnalysisReport }) {
       </header>
 
       <div className="memo-measures">
-        <Metric label="现价" value={money.format(report.price)} detail={`P/E ${report.pe.toFixed(1)}x`} />
+        <Metric label="最新可用价" value={money.format(report.price)} detail={`${report.price_change_pct >= 0 ? "+" : ""}${report.price_change_pct.toFixed(2)}% · ${report.market_status === "OPEN" ? "交易中" : "已收盘"}`} tone={report.price_change_pct >= 0 ? "good" : "risk"} />
         <Metric label="物理瓶颈" value={`L${report.chokepoint.chokepoint_level}`} detail={`${report.chokepoint.overall_score.toFixed(1)} / 10`} />
         <Metric label="DCF 内在价值" value={money.format(report.valuation.intrinsic_value_dcf)} detail={`${report.valuation.margin_of_safety_pct >= 0 ? "+" : ""}${report.valuation.margin_of_safety_pct.toFixed(1)}% 安全边际`} />
         <Metric label="建议上限" value={`${report.risk.recommended_max_allocation_pct.toFixed(1)}%`} detail={`Beta ${report.beta.toFixed(2)}`} />
@@ -454,8 +470,62 @@ function ResearchMemo({ report }: { report: AnalysisReport }) {
         </section>
       </div>
 
+      <section className="ruled-section evidence-section">
+        <SectionHeading index="C" title="数据来源与新鲜度" note="研究级第三方数据不等于 Binance 券商账户权威数据，因此不能触发 Live 买单。" />
+        <div className="source-ledger">
+          {report.source_trace.map((source) => (
+            <div className="source-row" key={`${source.provider}-${source.kind}`}>
+              <Database size={15} />
+              <div><strong>{source.provider}</strong><span>{source.kind}</span></div>
+              <span className="mono">{source.as_of_utc ? formatDate(source.as_of_utc) : `${source.latency_ms} ms`}</span>
+              <StatusMark tone={source.status === "ok" ? "good" : "risk"}>{source.status === "ok" ? "成功" : "失败"}</StatusMark>
+            </div>
+          ))}
+        </div>
+        <div className="freshness-notes">
+          <span>行情时间 <strong className="mono">{formatDate(report.quote_as_of_utc)}</strong></span>
+          <span>基本面期末 <strong className="mono">{report.fundamentals_as_of || "未返回"}</strong></span>
+          <span>交易所 <strong className="mono">{report.exchange || "未知"}</strong></span>
+          <span>实盘权威 <strong className="mono risk-text">否</strong></span>
+        </div>
+        {!!report.fallback_fields.length && <div className="inline-error"><CircleAlert size={16} /><span><strong>回退字段</strong>{report.fallback_fields.join("、")}</span></div>}
+      </section>
+
+      <div className="memo-body two-column evidence-columns">
+        <section className="ruled-section news-section">
+          <SectionHeading index="D" title="最新新闻与事件证据" note={`${report.news.providers_attempted.join(" + ") || "新闻检索未启用"} · ${report.news.latency_ms} ms`} />
+          {report.news.items.length ? (
+            <div className="news-ledger">
+              {report.news.items.map((item) => (
+                <a href={item.url} target="_blank" rel="noreferrer" key={item.evidence_id}>
+                  <span className="evidence-id mono">{item.evidence_id}</span>
+                  <div><strong>{item.title}</strong><span>{item.publisher} · {formatDate(item.published_at_utc)}</span></div>
+                  <ArrowUpRight size={14} />
+                </a>
+              ))}
+            </div>
+          ) : <EmptyState icon={Archive} title={report.news.status === "disabled" ? "新闻检索未启用" : "没有拿到当前新闻"} body={report.news.error ?? "本次检索没有返回与标的直接相关的可引用标题。"} />}
+          {report.news.error && report.news.items.length > 0 && <div className="provider-warning"><CircleAlert size={14} />部分新闻源降级：{report.news.error}</div>}
+        </section>
+
+        <section className="ruled-section ai-research-section">
+          <SectionHeading index="E" title="AI 证据综合" note={report.ai_research.status === "ok" ? `${report.ai_research.provider} / ${report.ai_research.model} · ${report.ai_research.latency_ms} ms` : "AI 不参与确定性分数与风控"} />
+          {report.ai_research.status === "ok" ? (
+            <div className="ai-synthesis">
+              <div className="ai-verdict"><StatusMark tone={report.ai_research.action_bias === "BULLISH" ? "good" : report.ai_research.action_bias === "BEARISH" ? "risk" : "warn"}>{aiBias(report.ai_research.action_bias)}</StatusMark><span className="mono">置信度 {(report.ai_research.confidence * 100).toFixed(0)}%</span></div>
+              <p>{report.ai_research.summary}</p>
+              <div className="thesis-callout"><span>可证伪命题</span><strong>{report.ai_research.thesis}</strong></div>
+              <div className="ai-points"><div><span>催化</span><ul>{report.ai_research.catalysts.map((item) => <li key={item}>{item}</li>)}</ul></div><div><span>风险</span><ul>{report.ai_research.risks.map((item) => <li key={item}>{item}</li>)}</ul></div></div>
+              <div className="citation-row"><span>引用</span>{report.ai_research.citations.length ? report.ai_research.citations.map((item) => <b className="mono" key={item}>{item}</b>) : <em>未引用当前新闻，置信度已受限</em>}</div>
+            </div>
+          ) : (
+            <EmptyState icon={BrainCircuit} title={report.ai_research.status === "disabled" ? "AI 研究尚未启用" : "AI Provider 本轮失败"} body={report.ai_research.error ?? "前往 AI 投研页选择 OpenAI-compatible、Ollama 或本地 Codex。即使关闭 AI，实时数据和新闻仍可独立工作。"} />
+          )}
+        </section>
+      </div>
+
       <section className="redline-section">
-        <SectionHeading index="C" title="论文失效红线" note={`组合角色：${report.risk.portfolio_role} · 建议止损触发 ${report.risk.stop_loss_trigger_pct.toFixed(1)}%`} />
+        <SectionHeading index="F" title="论文失效红线" note={`组合角色：${report.risk.portfolio_role} · 建议止损触发 ${report.risk.stop_loss_trigger_pct.toFixed(1)}%`} />
         <ol>
           {report.risk.redline_failure_criteria.map((criterion) => <li key={criterion}>{criterion}</li>)}
         </ol>
@@ -607,6 +677,105 @@ function AgentPage({
           <div className="safety-footnote"><LockKeyhole size={16} /><p>后台 Agent 只使用本地 Paper Broker。即使已经保存 Binance API Key，也不会提交真实订单。</p></div>
         </section>
       </div>
+    </div>
+  );
+}
+
+function AISettingsPage({
+  settings,
+  configured,
+  busy,
+  onSettings,
+  onSaveSettings,
+  onSaveKey,
+  onDeleteKey,
+  onTest,
+}: {
+  settings: DesktopSettings;
+  configured: boolean;
+  busy: BusyAction;
+  onSettings: (next: DesktopSettings) => void;
+  onSaveSettings: () => Promise<void>;
+  onSaveKey: (key: string) => Promise<void>;
+  onDeleteKey: () => Promise<void>;
+  onTest: () => Promise<void>;
+}) {
+  const [key, setKey] = useState("");
+  const research = settings.research;
+  const update = (patch: Partial<DesktopSettings["research"]>) => onSettings({
+    ...settings,
+    research: { ...research, ...patch },
+  });
+  const selectProvider = (provider: DesktopSettings["research"]["ai_provider"]) => {
+    const presets = {
+      "openai-compatible": { ai_base_url: "https://api.openai.com/v1", ai_model: "gpt-5-mini" },
+      ollama: { ai_base_url: "http://127.0.0.1:11434", ai_model: "qwen3:8b" },
+      "codex-cli": { ai_base_url: "local://codex", ai_model: "gpt-5.6-sol" },
+    } as const;
+    update({ ai_provider: provider, ...presets[provider] });
+  };
+  const requiresKey = research.ai_provider === "openai-compatible";
+  const submitKey = (event: FormEvent) => {
+    event.preventDefault();
+    void onSaveKey(key).then(() => setKey("")).catch(() => undefined);
+  };
+
+  return (
+    <div className="page-stack ai-settings-page">
+      <section className="connection-status ai-connection-status">
+        <div className={`connection-emblem ${research.ai_enabled ? "connected" : ""}`}><BrainCircuit size={25} /></div>
+        <div><span className="mono">RESEARCH INTELLIGENCE / OPTIONAL</span><h2>{research.ai_enabled ? `${research.ai_provider} · ${research.ai_model}` : "AI 证据综合当前关闭"}</h2><p>行情和新闻始终独立获取；大模型只综合现有证据，不改写分数、风控或执行权限。</p></div>
+        <StatusMark tone={research.ai_enabled ? "good" : "warn"}>{research.ai_enabled ? "已启用" : "未启用"}</StatusMark>
+      </section>
+
+      <div className="two-column equal ai-config-grid">
+        <section className="ruled-section form-section provider-form">
+          <SectionHeading index="01" title="模型 Provider" note="支持 OpenAI-compatible、Ollama 和本机 Codex CLI。" />
+          <label className="toggle-row wide-toggle">
+            <span><strong>启用 AI 研究综合</strong><small>每个标的会产生一次模型请求；可能产生 API 或 Codex 用量。</small></span>
+            <input type="checkbox" checked={research.ai_enabled} onChange={(event) => update({ ai_enabled: event.target.checked })} />
+          </label>
+          <div className="form-grid">
+            <label className="field-label"><span>Provider</span><select value={research.ai_provider} onChange={(event) => selectProvider(event.target.value as DesktopSettings["research"]["ai_provider"])}><option value="openai-compatible">OpenAI-compatible API</option><option value="ollama">Ollama（本机）</option><option value="codex-cli">Codex CLI（本机登录）</option></select></label>
+            <label className="field-label"><span>Model ID</span><input value={research.ai_model} onChange={(event) => update({ ai_model: event.target.value })} placeholder="gpt-5-mini" /></label>
+            {research.ai_provider !== "codex-cli" && <label className="field-label form-span"><span>Base URL</span><input className="mono" value={research.ai_base_url} onChange={(event) => update({ ai_base_url: event.target.value })} placeholder="https://api.openai.com/v1" spellCheck={false} /></label>}
+            <label className="field-label"><span>超时（秒）</span><input type="number" min="10" max="300" value={research.ai_timeout_seconds} onChange={(event) => update({ ai_timeout_seconds: Number(event.target.value) })} /></label>
+            <label className="field-label"><span>Temperature</span><input type="number" min="0" max="1" step="0.1" value={research.ai_temperature} onChange={(event) => update({ ai_temperature: Number(event.target.value) })} /></label>
+            <label className="field-label"><span>Reasoning</span><select value={research.ai_reasoning_effort} onChange={(event) => update({ ai_reasoning_effort: event.target.value as DesktopSettings["research"]["ai_reasoning_effort"] })}><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label>
+          </div>
+          <div className="button-row provider-actions">
+            <button className="primary-button" disabled={busy !== null || !research.ai_model.trim() || (requiresKey && !configured)} onClick={() => void onTest()}>{busy === "ai-test" ? <LoaderCircle className="spin" size={15} /> : <Activity size={15} />}测试真实连接</button>
+            <button className="secondary-button" disabled={busy !== null} onClick={() => void onSaveSettings()}><Save size={15} />保存配置</button>
+          </div>
+        </section>
+
+        <section className="ruled-section form-section ai-credential-panel">
+          <SectionHeading index="02" title={requiresKey ? "API Key 钥匙串" : "本地运行凭据"} note={requiresKey ? "Key 只保存在 macOS Keychain，不写入桌面配置和审计日志。" : "本地 Provider 不需要把 API Key 交给 BerkshireNexus。"} />
+          {requiresKey ? (
+            <form onSubmit={submitKey}>
+              <div className="credential-state"><KeyRound size={18} /><div><strong>{configured ? "AI API Key 已配置" : "尚未保存 AI API Key"}</strong><span>{configured ? "前端无法读取或回显原文" : "OpenAI、OpenRouter、DeepSeek 等兼容服务均使用此安全槽位"}</span></div><StatusMark tone={configured ? "good" : "warn"}>{configured ? "可调用" : "待配置"}</StatusMark></div>
+              <label className="field-label"><span>AI_PROVIDER_API_KEY</span><div className="secret-input"><KeyRound size={16} /><input type="password" value={key} onChange={(event) => setKey(event.target.value)} placeholder={configured ? "输入新 Key 可替换" : "粘贴 Provider API Key"} autoComplete="off" spellCheck={false} /></div></label>
+              <div className="button-row"><button className="primary-button" type="submit" disabled={busy !== null || key.trim().length < 8}>{busy === "ai-key" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}存入钥匙串</button>{configured && <button className="danger-text-button" type="button" disabled={busy !== null} onClick={() => void onDeleteKey()}><Trash2 size={15} />删除 Key</button>}</div>
+            </form>
+          ) : research.ai_provider === "ollama" ? (
+            <div className="local-provider-note"><Database size={21} /><strong>连接本机 Ollama</strong><p>先安装并运行 Ollama，再拉取与 Model ID 相同的模型。请求只发往当前 Base URL。</p><code>ollama pull {research.ai_model || "qwen3:8b"}</code></div>
+          ) : (
+            <div className="local-provider-note"><BrainCircuit size={21} /><strong>启动独立的本地 Codex 任务</strong><p>这不是复用当前聊天内容。每次研究会通过本机 <code>codex exec --ephemeral --sandbox read-only</code> 创建一次独立请求，使用你在 Codex CLI 中的登录和模型用量。</p><span>选择此项即代表你明确允许研究周期消耗本地 Codex 用量。</span></div>
+          )}
+        </section>
+      </div>
+
+      <section className="ruled-section data-provider-section">
+        <SectionHeading index="03" title="行情与新闻数据源" note="无需 AI Key 也能工作；每次研究都会记录 provider、数据时间、检索时间与失败原因。" />
+        <div className="data-provider-grid">
+          <div className="provider-card"><Database size={18} /><span>行情 / 历史</span><strong>Yahoo Finance Chart</strong><small>最新可用价、52 周区间、1 年日线与 Beta</small><StatusMark tone="good">默认启用</StatusMark></div>
+          <div className="provider-card"><ClipboardList size={18} /><span>基本面</span><strong>Nasdaq Public API</strong><small>年报、EPS、公司资料与来源日期</small><StatusMark tone="good">默认启用</StatusMark></div>
+          <div className="provider-card"><Search size={18} /><span>新闻 / 事件</span><strong>Yahoo + SEC + Google</strong><small>媒体标题、官方申报、时间、原文 URL 与证据 ID</small><label className="mini-switch"><input type="checkbox" checked={research.news_enabled} onChange={(event) => update({ news_enabled: event.target.checked })} /><span>{research.news_enabled ? "已启用" : "已关闭"}</span></label></div>
+        </div>
+        <div className="news-settings-row"><label className="field-label"><span>新闻回退策略</span><select value={research.news_provider} onChange={(event) => update({ news_provider: event.target.value as DesktopSettings["research"]["news_provider"] })}><option value="yahoo-google">Yahoo + SEC → Google RSS</option><option value="yahoo">仅 Yahoo Finance</option></select></label><label className="field-label"><span>每个标的最多</span><input type="number" min="1" max="12" value={research.max_news_items} onChange={(event) => update({ max_news_items: Number(event.target.value) })} /></label></div>
+      </section>
+
+      <section className="guardrail-statement"><ShieldCheck size={21} /><div><strong>AI 与真实资金之间没有直通路径</strong><p>AI 输出只作为带引用的研究附录；确定性综合分、仓位上限、换手、日损和 Live 权限均由独立代码控制。</p></div></section>
     </div>
   );
 }
@@ -858,7 +1027,7 @@ function SettingsPage({
       <section className="ruled-section system-boundary">
         <SectionHeading index="03" title="当前系统边界" action={<button className="secondary-button" disabled={busy !== null} onClick={() => void onSaveSettings()}><Save size={15} />保存全部设置</button>} />
         <div className="boundary-grid">
-          <div><CircleCheck size={17} /><span><strong>可以在 App 内完成</strong>保存/删除 API Key、只读预检、研究、模拟交易、Agent 启停、模型晋升、风控和审计。</span></div>
+          <div><CircleCheck size={17} /><span><strong>可以在 App 内完成</strong>保存/删除 Binance 与 AI Key、Provider 测试、当前数据/新闻研究、模拟交易、Agent 启停、策略晋升、风控和审计。</span></div>
           <div><CircleAlert size={17} /><span><strong>仍需 Binance 官方界面</strong>开户、身份验证、Stocks 资格、API Key 创建、权限/IP 配置与账户合规确认。</span></div>
           <div><LockKeyhole size={17} /><span><strong>暂未开放</strong>真实下单、真实现金/持仓同步、撤单、订单恢复和重启对账。</span></div>
         </div>
@@ -875,6 +1044,7 @@ export default function App() {
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [agentRunning, setAgentRunning] = useState(false);
   const [keyConfigured, setKeyConfigured] = useState(false);
+  const [aiKeyConfigured, setAIKeyConfigured] = useState(false);
   const [busy, setBusy] = useState<BusyAction>("boot");
   const [toast, setToast] = useState<Toast | null>(null);
   const [modeExplanation, setModeExplanation] = useState(false);
@@ -909,17 +1079,19 @@ export default function App() {
     let alive = true;
     const boot = async () => {
       try {
-        const [nextSettings, nextSnapshot, runtime, configured] = await Promise.all([
+        const [nextSettings, nextSnapshot, runtime, configured, aiConfigured] = await Promise.all([
           desktopBridge.loadSettings(),
           desktopBridge.snapshot(),
           desktopBridge.agentStatus(),
           desktopBridge.keyStatus(),
+          desktopBridge.aiKeyStatus(),
         ]);
         if (!alive) return;
         setSettings(nextSettings);
         setSnapshot(nextSnapshot);
         setAgentRunning(runtime.running);
         setKeyConfigured(configured);
+        setAIKeyConfigured(aiConfigured);
       } catch (error) {
         if (alive) notify("error", `桌面应用初始化失败：${asError(error)}`);
       } finally {
@@ -946,7 +1118,7 @@ export default function App() {
   const analyze = async (tickers: string[]) => {
     setBusy("research");
     try {
-      const values = await desktopBridge.analyze(tickers);
+      const values = await desktopBridge.analyzeWithSettings(tickers, settings);
       setReports(values);
       setSelectedTicker(values[0]?.ticker ?? null);
       notify("success", `已完成 ${values.length} 个标的的综合研究`);
@@ -1053,12 +1225,54 @@ export default function App() {
     }
   };
 
+  const saveAIKey = async (key: string) => {
+    setBusy("ai-key");
+    try {
+      await desktopBridge.saveAIKey(key);
+      setAIKeyConfigured(true);
+      notify("success", "AI Provider API Key 已安全写入系统钥匙串");
+    } catch (error) {
+      notify("error", `保存 AI API Key 失败：${asError(error)}`);
+      throw error;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const deleteAIKey = async () => {
+    setBusy("ai-key");
+    try {
+      await desktopBridge.deleteAIKey();
+      setAIKeyConfigured(false);
+      notify("info", "AI API Key 已从系统钥匙串删除");
+    } catch (error) {
+      notify("error", `删除 AI API Key 失败：${asError(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const testAI = async () => {
+    setBusy("ai-test");
+    try {
+      await desktopBridge.saveSettings(settings);
+      const result = await desktopBridge.testAIProvider(settings);
+      if (result.status !== "ok") throw new Error(result.error ?? "Provider 未返回有效 JSON");
+      notify("success", `${result.provider} / ${result.model} 连接成功，耗时 ${result.latency_ms} ms`);
+    } catch (error) {
+      notify("error", `AI Provider 连接失败：${asError(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const meta = pageMeta[page];
   const pageContent = useMemo(() => {
     if (!snapshot) return <LoadingPage />;
     switch (page) {
       case "overview": return <Overview snapshot={snapshot} goTo={setPage} />;
       case "research": return <Research settings={settings} reports={reports} selectedTicker={selectedTicker} busy={busy === "research"} onAnalyze={analyze} onSelect={setSelectedTicker} />;
+      case "ai": return <AISettingsPage settings={settings} configured={aiKeyConfigured} busy={busy} onSettings={setSettings} onSaveSettings={() => saveSettings("AI 与数据源配置已保存")} onSaveKey={saveAIKey} onDeleteKey={deleteAIKey} onTest={testAI} />;
       case "portfolio": return <Portfolio snapshot={snapshot} />;
       case "agent": return <AgentPage snapshot={snapshot} settings={settings} running={agentRunning} busy={busy === "agent" || busy === "cycle"} onSettings={setSettings} onStart={startAgent} onStop={stopAgent} onCycle={runCycle} />;
       case "models": return <Models snapshot={snapshot} busy={busy === "promote"} onPromote={promote} />;
@@ -1067,7 +1281,7 @@ export default function App() {
       case "settings": return <SettingsPage settings={settings} configured={keyConfigured} busy={busy} onSaveKey={saveKey} onDeleteKey={deleteKey} onPreflight={preflight} onSaveSettings={saveSettings} />;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, snapshot, settings, reports, selectedTicker, busy, agentRunning, keyConfigured]);
+  }, [page, snapshot, settings, reports, selectedTicker, busy, agentRunning, keyConfigured, aiKeyConfigured]);
 
   return (
     <div className="app-shell">
@@ -1090,7 +1304,7 @@ export default function App() {
         </nav>
         <div className="sidebar-footer">
           <div className="agent-mini-status"><span className={agentRunning ? "active" : ""} /><div><strong>Paper Agent</strong><small>{agentRunning ? "后台运行中" : "已停止"}</small></div></div>
-          <div className="build-label"><span>LOCAL-FIRST</span><span>v1.2.0</span></div>
+          <div className="build-label"><span>LOCAL-FIRST</span><span>v1.3.0</span></div>
         </div>
       </aside>
 

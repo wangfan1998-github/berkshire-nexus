@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 from uuid import uuid4
 from ..data.fetcher import DataFetcher, CompanyFinancials
 from .chokepoint import ChokepointAnalyzer, ChokepointResult
@@ -12,6 +13,9 @@ from .masters import MastersDebateEngine, MasterDebateResult
 from .valuation import ValuationEngine, ValuationResult
 from .quant_factors import QuantFactorModel, QuantFactorBreakdown
 from .risk_manager import RiskManager, RiskAssessment
+from ..research.ai import AIResearchResult, AIResearchService
+from ..research.config import ResearchConfig
+from ..research.news import NewsResult, NewsService
 
 
 @dataclass
@@ -26,13 +30,22 @@ class ComprehensiveAnalysisReport:
     overall_recommendation: str    # STRONG BUY / BUY / HOLD / AVOID
     analysis_id: str
     generated_at_utc: str
+    news: NewsResult
+    ai_research: AIResearchResult
 
 
 class OmniAlphaOrchestrator:
     """End-to-end orchestration pipeline for investment research."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        research_config: Optional[ResearchConfig] = None,
+        ai_api_key: str = "",
+    ):
+        self.research_config = research_config or ResearchConfig()
         self.fetcher = DataFetcher()
+        self.news_service = NewsService(self.research_config)
+        self.ai_service = AIResearchService(self.research_config, ai_api_key)
         self.chokepoint_analyzer = ChokepointAnalyzer()
         self.masters_engine = MastersDebateEngine()
         self.valuation_engine = ValuationEngine()
@@ -78,6 +91,53 @@ class OmniAlphaOrchestrator:
         else:
             rec = "AVOID / DISQUALIFIED (Unfavorable Profile)"
 
+        news = self.news_service.fetch(fin.ticker, fin.name)
+        ai_research = self.ai_service.synthesize(
+            fin.ticker,
+            {
+                "company": {
+                    "ticker": fin.ticker,
+                    "name": fin.name,
+                    "sector": fin.sector,
+                    "description": fin.description,
+                },
+                "market_data": {
+                    "price": fin.price,
+                    "currency": fin.currency,
+                    "previous_close": fin.previous_close,
+                    "price_change_pct": fin.price_change_pct,
+                    "market_status": fin.market_status,
+                    "quote_as_of_utc": fin.quote_as_of_utc,
+                    "fundamentals_as_of": fin.fundamentals_as_of,
+                    "verification_level": fin.verification_level,
+                    "fallback_fields": fin.fallback_fields,
+                },
+                "fundamentals": {
+                    "pe": fin.pe,
+                    "forward_pe": fin.forward_pe,
+                    "eps": fin.eps,
+                    "beta": fin.beta,
+                    "market_cap": fin.market_cap,
+                    "revenue_growth_yoy": fin.revenue_growth_yoy,
+                    "gross_margin": fin.gross_margin,
+                    "operating_margin": fin.operating_margin,
+                    "fcf_yield": fin.fcf_yield,
+                    "roe": fin.roe,
+                    "debt_to_equity": fin.debt_to_equity,
+                },
+                "deterministic_analysis": {
+                    "score": final_score,
+                    "recommendation": rec,
+                    "chokepoint": asdict(chokepoint),
+                    "masters": asdict(debate),
+                    "valuation": asdict(val),
+                    "quant": asdict(quant),
+                    "risk": asdict(risk),
+                },
+            },
+            news.items,
+        )
+
         return ComprehensiveAnalysisReport(
             financials=fin,
             chokepoint=chokepoint,
@@ -89,10 +149,16 @@ class OmniAlphaOrchestrator:
             overall_recommendation=rec,
             analysis_id=uuid4().hex,
             generated_at_utc=datetime.now(timezone.utc).isoformat(),
+            news=news,
+            ai_research=ai_research,
         )
 
     def compare_multiple(self, tickers: List[str]) -> List[ComprehensiveAnalysisReport]:
-        reports = [self.analyze_single(t) for t in tickers]
+        # Network providers dominate latency. Independent tickers are fetched
+        # concurrently while all scoring/risk functions remain deterministic.
+        workers = min(max(len(tickers), 1), 4)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            reports = list(executor.map(self.analyze_single, tickers))
         # Sort descending by final composite score
         reports.sort(key=lambda r: r.final_composite_score, reverse=True)
         return reports

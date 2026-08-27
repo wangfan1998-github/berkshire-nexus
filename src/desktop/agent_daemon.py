@@ -29,12 +29,14 @@ def main() -> None:
     parser.add_argument("--cash", type=float, default=100_000.0)
     parser.add_argument("--auto-promote-paper", action="store_true")
     parser.add_argument("--risk-config-json", default="{}")
+    parser.add_argument("--research-config-json", default="{}")
     args = parser.parse_args()
 
     if args.interval_minutes < 1.0:
         raise SystemExit("interval-minutes must be at least 1")
     service = DesktopService(args.state_dir)
     risk_config = json.loads(args.risk_config_json)
+    research_config = json.loads(args.research_config_json)
     status_path = args.state_dir / "desktop_agent_status.json"
     cycles_completed = 0
     while True:
@@ -56,6 +58,8 @@ def main() -> None:
                 initial_cash=args.cash,
                 auto_promote_paper=args.auto_promote_paper,
                 risk_config=risk_config,
+                research_config=research_config,
+                ai_api_key=os.environ.get("BERKSHIRE_NEXUS_AI_API_KEY", ""),
             )
             cycles_completed += 1
             status.update({

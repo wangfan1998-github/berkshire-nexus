@@ -25,14 +25,19 @@ def main() -> None:
 
     analyze = subparsers.add_parser("analyze")
     analyze.add_argument("tickers", nargs="+")
+    analyze.add_argument("--research-config-json", default="{}")
 
     cycle = subparsers.add_parser("cycle")
     cycle.add_argument("tickers", nargs="+")
     cycle.add_argument("--cash", type=float, default=100_000.0)
     cycle.add_argument("--auto-promote-paper", action="store_true")
     cycle.add_argument("--risk-config-json", default="{}")
+    cycle.add_argument("--research-config-json", default="{}")
 
     subparsers.add_parser("model-promote")
+
+    test_ai = subparsers.add_parser("test-ai")
+    test_ai.add_argument("--research-config-json", required=True)
 
     preflight = subparsers.add_parser("binance-preflight")
     preflight.add_argument("tickers", nargs="+")
@@ -43,13 +48,19 @@ def main() -> None:
         if args.command == "snapshot":
             value = service.snapshot()
         elif args.command == "analyze":
-            value = service.analyze(args.tickers)
+            value = service.analyze(
+                args.tickers,
+                research_config=json.loads(args.research_config_json),
+                ai_api_key=os.environ.get("BERKSHIRE_NEXUS_AI_API_KEY", ""),
+            )
         elif args.command == "cycle":
             value = service.run_paper_cycle(
                 args.tickers,
                 initial_cash=args.cash,
                 auto_promote_paper=args.auto_promote_paper,
                 risk_config=json.loads(args.risk_config_json),
+                research_config=json.loads(args.research_config_json),
+                ai_api_key=os.environ.get("BERKSHIRE_NEXUS_AI_API_KEY", ""),
             )
         elif args.command == "model-promote":
             value = service.promote_model()
@@ -57,6 +68,11 @@ def main() -> None:
             value = service.binance_preflight(
                 os.environ.get("BINANCE_API_KEY", ""),
                 args.tickers,
+            )
+        elif args.command == "test-ai":
+            value = service.test_ai_provider(
+                json.loads(args.research_config_json),
+                os.environ.get("BERKSHIRE_NEXUS_AI_API_KEY", ""),
             )
         else:
             raise ValueError(f"unsupported desktop command: {args.command}")

@@ -58,6 +58,12 @@ class DeterministicRiskEngine:
         if mode == "live":
             if not reducing_risk and self.policy.require_verified_data_live and order.uses_fallback_data:
                 reasons.append("fallback or inferred analysis data cannot trigger a live order")
+            if (
+                not reducing_risk
+                and self.policy.require_verified_data_live
+                and not order.data_is_authoritative
+            ):
+                reasons.append("third-party research data is not broker-authoritative for live execution")
             if not self.policy.allow_market_orders_live and order.order_type == "MARKET":
                 reasons.append("market orders are disabled for live execution")
             if order.tokenize:

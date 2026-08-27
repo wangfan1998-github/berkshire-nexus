@@ -26,6 +26,7 @@ class OrderIntent:
     analysis_id: str
     data_source: str
     uses_fallback_data: bool
+    data_is_authoritative: bool = False
     tokenize: bool = False
     rationale: str = ""
 

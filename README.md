@@ -26,7 +26,7 @@
 4. **格雷厄姆与巴菲特所有者收益（Owner Earnings DCF）**：扣掉虚高的估值泡沫，真实的自由现金流安全边际有多少？
 5. **对冲基金风控纪律**：如果买，单一个股仓位上限是多少？什么时候必须止损一票否决？
 
-`BerkshireNexus` 就是为了解决这个问题而诞生的。它吸收并提炼了 GitHub 上最顶尖的投研项目之精髓（`serenity-skill`、`ai-berkshire`、`qlib`、`ai-hedge-fund`、`Value-Investing-Agent`），构建出一套**强制输出明确结论、多视角激烈对抗、量化数据交叉印证**的现代化投研决策体系。现在它也提供一个 macOS 优先的桌面操作台，把研究、模拟组合、后台 Agent、模型学习、风控、Binance 预检和审计记录放在同一条证据链中。
+`BerkshireNexus` 就是为了解决这个问题而诞生的。它吸收并提炼了 GitHub 上顶尖投研项目的思想，构建出一套**强制输出明确结论、多视角对抗、量化数据交叉印证**的现代化投研决策体系。v1.3 又参考了 [`daily_stock_analysis`](https://github.com/ZhuLinsen/daily_stock_analysis) 的数据/新闻证据链和 [`ValueCell`](https://github.com/ValueCell-ai/valuecell) 的 Provider 配置分层，加入当前行情、基本面、新闻引用和可配置 AI 综合；实现为本项目自己的小型、可审计模块，没有整体搬入这些大型项目。
 
 ---
 
@@ -71,6 +71,11 @@ Python 核心采用 **零外部依赖（Zero Dependency）** 设计，无需繁�
 
 桌面端使用 **Tauri 2 + React + TypeScript**，保留现有 Python 研究/学习/风控引擎。它不是网页套壳式行情看板，而是一个本地优先的交易研究操作台：
 
+- Yahoo Finance 最新可用行情/一年日线 + Nasdaq 基本面与公司资料；
+- Yahoo Finance 新闻 + SEC EDGAR 官方申报，缺少媒体结果时可回退 Google News RSS；
+- 每条新闻都有证据 ID、标题、发布方、发布时间和原文 URL；
+- OpenAI-compatible、Ollama、本地 Codex CLI 三种 AI Provider；
+- macOS Keychain 独立保存 Binance Key 与 AI Provider Key；
 - 总览研究 → 风控 → 模拟成交 → 学习反馈的完整证据链；
 - 多股票研究备忘录、Paper 组合与模拟成交账本；
 - 可启停的后台 Paper Agent，关闭主窗口后驻留系统托盘；
@@ -113,6 +118,31 @@ macOS 构建产物位于 `desktop/src-tauri/target/release/bundle/macos/Berkshir
 4. 运行“只读连通性检查”。本版本不需要 API Secret，也不会开放真实下单。
 
 不要把 API Key 发到聊天、GitHub Issue、截图或提交到 `.env`。Key 保存到 macOS Keychain；前端只读取“是否已配置”，无法回显原文。开户、身份验证、Stocks 资格、API Key 创建与权限设置仍需在 Binance 官方网页或 App 完成。
+
+#### 查看最新价格、新闻并配置 AI 模型
+
+启动桌面 App 后：
+
+1. 打开 **研究**，输入 `AAPL MSFT NVDA`，点击“开始研究”；
+2. 结果会分开显示“最新可用价”“行情时间”“基本面期末”“来源追踪”“最新新闻与事件证据”；
+3. 打开 **AI 投研**，启用 AI 综合并选择 Provider：
+   - **OpenAI-compatible**：填写 Model ID 与 Base URL，把 API Key 存入独立的 macOS Keychain 槽位；兼容 OpenAI、OpenRouter、DeepSeek 等 Chat Completions 服务；
+   - **Ollama**：使用本机 `http://127.0.0.1:11434`，无需向本项目提供 Key；
+   - **Codex CLI**：使用本机已有的 Codex 登录，每个标的启动一次独立、临时、只读的 `codex exec` 请求，会消耗你的 Codex 用量；它不会偷偷复用当前聊天；
+4. 先点击“测试真实连接”，成功后保存配置，再回到研究页运行。
+
+AI 关闭时，行情与新闻仍能独立工作。AI 只接收系统已经抓到的结构化数据和新闻证据，当前新闻陈述必须引用 `N1`、`N2` 等证据 ID；Provider、模型、Prompt 版本、耗时、Token 用量（如果 Provider 返回）与错误都会写进周期审计。AI 输出不会修改确定性综合分或拥有下单权限。
+
+#### 数据可信度不是一句“实时”
+
+| 数据 | 默认来源 | UI 中显示 | 实盘资格 |
+|---|---|---|---|
+| 最新可用价 / 日线 | Yahoo Finance Chart | 行情时间、市场状态、延迟年龄、Provider | 研究级，非券商权威 |
+| 年报 / EPS / 公司资料 | Nasdaq Public API | 财务期末、字段来源、回退字段 | 研究级，非券商权威 |
+| 新闻 / 官方事件 | Yahoo Finance Search + SEC EDGAR → Google News RSS | 标题/申报表单、发布方、发布时间、原文、证据 ID | 仅作为研究证据 |
+| AI 综合 | 用户选择的 Provider | Provider、模型、引用、耗时、用量、错误 | 无执行权限 |
+
+网络失败时系统会明确显示 `third-party-degraded` 或 `offline-fallback` 以及具体回退字段，不会把预置数据伪装成最新数据。即便所有 Yahoo/Nasdaq 字段齐全，记录仍是 `is_authoritative=false`；Live 风控拒绝用第三方研究数据触发真实买单。
 
 ### 1. 命令行自动学习模拟交易 Agent
 
@@ -177,7 +207,7 @@ python3 -m src.cli binance-preflight AAPL MSFT
 - 每日总换手不超过组合的 25%；
 - 当日亏损达到 1% 后停止新增风险；
 - 实盘默认禁用市价单；
-- 含预置、回退或推断数据的分析不能触发实盘买入；
+- 含预置、回退或推断数据的分析不能触发实盘买入；完整的 Yahoo/Nasdaq 第三方研究数据同样不能代替 Binance 权威账户/订单数据；
 - 风险开关触发后仍允许合法的减仓卖出。
 
 Binance Stocks 的账户资格、地区限制、PDT、交易时段和免责声明要求仍由 Binance 与当地法规决定。官方没有文档化的 Stocks 测试网，因此本项目把本地模拟盘作为上线前必经阶段。
@@ -310,7 +340,11 @@ berkshire-nexus/
     │   ├── binance_stocks.py # Binance Stocks 原生 SAPI 适配
     │   └── types.py         # 订单、组合、成交契约
     ├── data/
-    │   └── fetcher.py       # 零鉴权实时行情与财务数据抓取器
+    │   └── fetcher.py       # Yahoo 行情/历史 + Nasdaq 基本面路由、来源和回退追踪
+    ├── research/
+    │   ├── config.py        # 非秘密 Provider 设置与安全校验
+    │   ├── news.py          # Yahoo / SEC EDGAR / Google 新闻事件、去重与证据 ID
+    │   └── ai.py            # OpenAI-compatible / Ollama / Codex CLI 证据综合
     └── core/
         ├── chokepoint.py    # Serenity 供应链 5 级物理瓶颈与替代壁垒评分器
         ├── masters.py       # Berkshire 4 大师 + 对冲基金 6 视角对抗辩论系统

@@ -1,6 +1,6 @@
 ---
 name: berkshire-nexus
-description: Auditable US-equity research and paper-trading agent with adaptive learning, deterministic risk controls, and a gated Binance Stocks adapter.
+description: Current-data US-equity research and paper-trading agent with cited news, configurable AI synthesis, adaptive learning, deterministic risk, and gated Binance Stocks.
 ---
 
 # BerkshireNexus Agent Skill
@@ -12,6 +12,8 @@ An institutional-grade investment research skill for Claude Code and Codex that 
 4. **Microsoft Qlib Multi-Factor Model**: Quality, Value, Growth, Momentum, and Low-Volatility quantitative scoring.
 5. **Hedge Fund Risk Manager**: Position sizing limits, volatility weighting, and failure inversion redlines.
 6. **Adaptive Paper Agent**: Delayed return labels, chronological model validation, champion/challenger governance, target-weight planning, deterministic controls, and persistent audit logs.
+7. **Current Evidence Layer**: Yahoo quote/history, Nasdaq fundamentals, cited Yahoo/Google news plus official SEC EDGAR filings, freshness/provenance, and explicit degradation.
+8. **Optional AI Synthesis**: OpenAI-compatible, Ollama, or local Codex CLI with constrained citations and provider/model/usage audit.
 
 ## How to Run
 
@@ -26,7 +28,7 @@ npm run desktop:dev
 npm run desktop:build
 ```
 
-The desktop shell requires Node.js 20+, Rust/Cargo, and Python 3.9+. It stores the Binance API Key in the operating-system credential store and exposes only credential status to the webview. The browser-only `npm run dev` path uses labeled demonstration data and cannot access Keychain or manage the persistent Python Agent.
+The desktop shell requires Node.js 20+, Rust/Cargo, and Python 3.9+. It stores Binance and AI Provider keys in separate operating-system credential entries and exposes only configured status to the webview. The browser-only `npm run dev` path uses labeled demonstration data and cannot access Keychain or manage the persistent Python Agent. Configure current-data/news behavior and optional OpenAI-compatible, Ollama, or Codex CLI synthesis under **AI 投研**.
 
 ### Python CLI
 
@@ -57,6 +59,8 @@ python3 -m src.cli binance-preflight <TICKER_1> <TICKER_2> ...
 - Do not expose broker credentials to an LLM or strategy component.
 - Never bypass `DeterministicRiskEngine`.
 - Do not use fallback or inferred research fields for live buys.
+- Do not treat complete Yahoo/Nasdaq research data as broker-authoritative; `is_authoritative=false` must block live buys.
+- AI summaries cannot change deterministic scores, risk rules, or order intents, and current-news claims must cite retrieved evidence IDs.
 - Keep `tokenize=false`; this integration targets direct equities only.
 - Do not claim a Binance Stocks testnet exists.
 - Live order construction requires both the explicit client flag and the real-money acknowledgement environment variable.
@@ -66,5 +70,6 @@ python3 -m src.cli binance-preflight <TICKER_1> <TICKER_2> ...
 
 ## Supported Universe
 - Any US stock ticker (e.g. `TSM`, `UBER`, `APP`, `ADBE`, `SOFI`, `GOOGL`, `AVGO`, `NVDA`, `AAPL`, `MSFT`)
-- Automatically fetches quotes and metrics with local fallback interpolation.
-- Local fallback/interpolated fundamentals are marked and are unsuitable for unattended live buys.
+- Fetches latest-available Yahoo quote/history plus Nasdaq statements, EPS, and company profiles.
+- Retrieves current Yahoo Finance news and official SEC EDGAR filings with optional Google News RSS fallback; every item carries an evidence ID and source URL.
+- Network and local fallback fields are marked separately. Neither third-party complete nor fallback research data is authoritative for live buys.

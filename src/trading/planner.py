@@ -96,6 +96,9 @@ class AllocationPlanner:
                 analysis_id=report.analysis_id,
                 data_source=report.financials.data_source,
                 uses_fallback_data=report.financials.uses_fallback_data,
+                data_is_authoritative=getattr(
+                    report.financials, "is_authoritative", False
+                ),
                 tokenize=False,
                 rationale=(
                     f"target {target_weight * 100:.2f}% from BerkshireNexus score "

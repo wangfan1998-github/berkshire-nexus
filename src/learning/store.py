@@ -58,6 +58,10 @@ class LearningStore:
                 "analysis_id": report.analysis_id,
                 "data_source": report.financials.data_source,
                 "uses_fallback_data": report.financials.uses_fallback_data,
+                "verification_level": report.financials.verification_level,
+                "is_authoritative": report.financials.is_authoritative,
+                "quote_as_of_utc": report.financials.quote_as_of_utc,
+                "fundamentals_as_of": report.financials.fundamentals_as_of,
                 "features": extract_report_features(report),
                 "settled_at": None,
             })

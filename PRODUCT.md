@@ -16,7 +16,7 @@ Primary user inferred from the repository and current brief: a technically capab
 
 ## Product Purpose
 
-BerkshireNexus turns explicit, multi-framework equity research into an auditable decision and paper-execution loop. Success means the user can understand why a position exists, see which data and model produced it, stop the agent instantly, and inspect every decision after the fact.
+BerkshireNexus turns current, source-attributed market evidence and explicit multi-framework equity research into an auditable decision and paper-execution loop. Success means the user can distinguish quote time from fundamentals time, open every cited news source, identify the AI provider/model, understand why a position exists, stop the agent instantly, and inspect every decision after the fact.
 
 ## Positioning
 
@@ -24,11 +24,14 @@ The product combines Berkshire-style fundamental reasoning, chokepoint analysis,
 
 ## Operating Context
 
-The user reviews a focused US-stock universe, runs analysis and paper cycles, monitors portfolio and risk state, inspects model promotion evidence, checks Binance Stocks connectivity, and reviews append-only audit records. Binance remains the external broker surface; the desktop app is the operating console.
+The user reviews a focused US-stock universe, retrieves current Yahoo/Nasdaq evidence and cited news, optionally synthesizes it through a configured OpenAI-compatible, Ollama, or local Codex provider, runs paper cycles, monitors portfolio and risk state, checks Binance Stocks connectivity, and reviews append-only audit records. Binance remains the external broker surface; the desktop app is the operating console.
 
 ## Capabilities and Constraints
 
 - Analyze one or many US-equity tickers.
+- Route latest-available quote/history and annual fundamentals through independent providers, recording source time, retrieval time, latency, failures, and field-level fallback.
+- Retrieve and deduplicate current news with stable evidence IDs and original URLs.
+- Configure optional AI synthesis without granting the model score, risk, credential, or execution authority.
 - Run a persistent paper portfolio with simulated commissions and slippage.
 - Settle delayed forward-return observations and train an auditable linear challenger model.
 - Require explicit or paper-only gated model promotion.
@@ -47,7 +50,7 @@ The user reviews a focused US-stock universe, runs analysis and paper cycles, mo
 ## Evidence on Hand
 
 - Existing Python research and trading modules under `src/`.
-- Fifteen passing unit tests under `tests/`.
+- Twenty-two passing unit tests under `tests/`.
 - Six detailed research examples under `examples/`.
 - Persistent paper portfolio, learning registry, and audit JSON formats.
 - No verified live-account reconciliation implementation and no performance track record that may be marketed as proof.

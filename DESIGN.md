@@ -11,7 +11,8 @@ The direction was developed using the public [Impeccable](https://github.com/pba
 The interface exists to make the evidence chain visible:
 
 ```text
-research evidence → model conviction → deterministic risk → paper execution → learning feedback
+market/fundamental provenance + cited news → deterministic research + optional AI synthesis
+                                            → deterministic risk → paper execution → learning feedback
 ```
 
 Live trading is deliberately rendered as an honest locked state. A disabled-looking control is not enough: selecting it explains the missing authoritative account snapshot, restart recovery, and order reconciliation capabilities.
@@ -32,10 +33,12 @@ Live trading is deliberately rendered as an honest locked state. A disabled-look
 1. Every primary control has hover, focus-visible, loading, disabled, success, and error behavior.
 2. Browser preview data is always labeled **演示数据**.
 3. API secrets are write-only from the webview: the UI receives a configured/not-configured status, never the stored value.
-4. Agent start and stop are visually dominant; a running Agent survives window close through the macOS system tray.
-5. Model promotion is visible only when a Challenger exists.
-6. Risk settings can only tighten Python's safe defaults and are validated again outside the UI.
-7. All animated transitions respect `prefers-reduced-motion`.
+4. Quote time, fundamentals period, provider latency, failure, and fallback fields are visibly separate; “current” never silently means “authoritative.”
+5. AI synthesis always names its provider/model and shows evidence IDs. Disabled and degraded states remain useful because data and news are independent.
+6. Agent start and stop are visually dominant; a running Agent survives window close through the macOS system tray.
+7. Model promotion is visible only when a Challenger exists.
+8. Risk settings can only tighten Python's safe defaults and are validated again outside the UI.
+9. All animated transitions respect `prefers-reduced-motion`.
 
 ## Layout
 
@@ -47,13 +50,14 @@ Live trading is deliberately rendered as an honest locked state. A disabled-look
 ## Screens
 
 1. **Overview:** portfolio measures, the evidence chain, recent research, operating notes, and executions.
-2. **Research:** multi-ticker command bar and an evidence-first investment memo.
-3. **Portfolio:** capital composition, holdings, risk capacity, and append-only paper fills.
-4. **Agent:** persistent background process controls and scheduling parameters.
-5. **Models:** sample readiness, Champion/Challenger evidence, and promotion gate.
-6. **Risk:** deterministic capital limits plus immutable safety rules.
-7. **Audit:** cycle index and safe local-record summaries.
-8. **Settings:** Keychain credential lifecycle, Binance preflight, and a clear system boundary.
+2. **Research:** multi-ticker command bar, source/freshness ledger, cited news, optional AI synthesis, and deterministic memo.
+3. **AI Research:** provider/model/base URL, independent AI Keychain credential, connection test, news settings, and the model boundary.
+4. **Portfolio:** capital composition, holdings, risk capacity, and append-only paper fills.
+5. **Agent:** persistent background process controls and scheduling parameters.
+6. **Strategy Learning:** sample readiness, Champion/Challenger evidence, and promotion gate; visually distinct from LLM configuration.
+7. **Risk:** deterministic capital limits plus immutable safety rules.
+8. **Audit:** cycle index and safe local-record summaries.
+9. **Settings:** Binance Keychain credential lifecycle, read-only preflight, and a clear system boundary.
 
 ## Rejected patterns
 

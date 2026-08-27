@@ -1,6 +1,7 @@
 export type PageId =
   | "overview"
   | "research"
+  | "ai"
   | "portfolio"
   | "agent"
   | "models"
@@ -62,12 +63,29 @@ export interface RiskConfig {
   allowed_symbols: string[];
 }
 
+export type AIProvider = "openai-compatible" | "ollama" | "codex-cli";
+
+export interface ResearchConfig {
+  market_provider: "yahoo-nasdaq";
+  news_enabled: boolean;
+  news_provider: "yahoo" | "yahoo-google";
+  max_news_items: number;
+  ai_enabled: boolean;
+  ai_provider: AIProvider;
+  ai_model: string;
+  ai_base_url: string;
+  ai_timeout_seconds: number;
+  ai_temperature: number;
+  ai_reasoning_effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+}
+
 export interface DesktopSettings {
   universe: string[];
   interval_minutes: number;
   initial_cash: number;
   auto_promote_paper: boolean;
   risk: RiskConfig;
+  research: ResearchConfig;
 }
 
 export interface AppSnapshot {
@@ -134,6 +152,27 @@ export interface AnalysisReport {
   data_source: string;
   uses_fallback_data: boolean;
   as_of_utc: string;
+  currency: string;
+  exchange: string;
+  market_status: string;
+  previous_close: number;
+  price_change_pct: number;
+  quote_as_of_utc: string;
+  fundamentals_as_of: string;
+  verification_level: "third-party-complete" | "third-party-degraded" | "offline-fallback" | string;
+  is_authoritative: boolean;
+  market_data_age_seconds: number | null;
+  fallback_fields: string[];
+  source_trace: Array<{
+    provider: string;
+    kind: string;
+    status: string;
+    as_of_utc: string;
+    retrieved_at_utc: string;
+    latency_ms: number;
+    fields: string[];
+    message: string;
+  }>;
   chokepoint: Record<string, unknown> & {
     chokepoint_level: number;
     overall_score: number;
@@ -162,6 +201,42 @@ export interface AnalysisReport {
     stop_loss_trigger_pct: number;
     portfolio_role: string;
     redline_failure_criteria: string[];
+  };
+  news: {
+    status: "ok" | "degraded" | "empty" | "error" | "disabled";
+    items: Array<{
+      evidence_id: string;
+      ticker: string;
+      title: string;
+      url: string;
+      publisher: string;
+      published_at_utc: string;
+      retrieved_at_utc: string;
+      source: string;
+      related_tickers: string[];
+      content_hash: string;
+    }>;
+    providers_attempted: string[];
+    retrieved_at_utc: string;
+    latency_ms: number;
+    error?: string | null;
+  };
+  ai_research: {
+    status: "ok" | "error" | "disabled";
+    provider: AIProvider;
+    model: string;
+    prompt_version: string;
+    generated_at_utc: string;
+    latency_ms: number;
+    summary: string;
+    thesis: string;
+    catalysts: string[];
+    risks: string[];
+    action_bias: "BULLISH" | "NEUTRAL" | "BEARISH" | "INSUFFICIENT_EVIDENCE";
+    confidence: number;
+    citations: string[];
+    usage: Record<string, unknown>;
+    error?: string | null;
   };
 }
 

@@ -62,6 +62,18 @@ class RiskAndPaperTests(unittest.TestCase):
         self.assertFalse(decision.approved)
         self.assertIn("fallback or inferred analysis data cannot trigger a live order", decision.reasons)
 
+    def test_live_buy_rejects_complete_but_non_authoritative_research_data(self):
+        decision = self.engine.evaluate(
+            make_order(uses_fallback_data=False, data_is_authoritative=False),
+            self.portfolio,
+            mode="live",
+        )
+        self.assertFalse(decision.approved)
+        self.assertIn(
+            "third-party research data is not broker-authoritative for live execution",
+            decision.reasons,
+        )
+
     def test_risk_reducing_sell_is_allowed_below_score(self):
         portfolio = PortfolioSnapshot(
             cash=0.0,

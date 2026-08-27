@@ -26,7 +26,7 @@ In the real world, investing is a high-stakes game of trade-offs, anti-bias veri
 4. **Graham & Buffett Owner Earnings (2-Stage DCF)**: Stripping away narrative hype, what is the true margin of safety based on free cash flows?
 5. **Hedge Fund Risk Sizing**: What is the maximum portfolio allocation cap? When is the stop-loss triggered?
 
-`BerkshireNexus` synthesizes the best ideas from top open-source projects (`serenity-skill`, `ai-berkshire`, `qlib`, `ai-hedge-fund`, `Value-Investing-Agent`) into an uncompromising, multi-perspective decision framework that outputs definitive conclusions. A macOS-first desktop console now joins research, the paper portfolio, a background agent, model learning, risk, Binance preflight, and audit evidence in one operating surface.
+`BerkshireNexus` synthesizes the best ideas from top open-source projects into an uncompromising, multi-perspective decision framework. v1.3 also draws architectural lessons from [`daily_stock_analysis`](https://github.com/ZhuLinsen/daily_stock_analysis) for provider/news evidence and [`ValueCell`](https://github.com/ValueCell-ai/valuecell) for model-provider settings. The implementation is a small, original, auditable layer rather than an import of either project.
 
 ---
 
@@ -36,7 +36,7 @@ The Python core runs on standard Python 3.9+ with no `pip install`; the desktop 
 
 ### macOS desktop app (recommended)
 
-The desktop application uses Tauri 2, React, and TypeScript while retaining the dependency-free Python research, learning, and risk engine. It includes the portfolio overview, research memos, paper ledger, background agent controls, champion/challenger registry, deterministic risk settings, audit viewer, and macOS Keychain-backed Binance API Key storage.
+The desktop application uses Tauri 2, React, and TypeScript while retaining the dependency-free Python research, learning, and risk engine. It includes current Yahoo Finance quotes/history, Nasdaq fundamentals, cited Yahoo/Google news plus official SEC EDGAR filings, configurable OpenAI-compatible/Ollama/local-Codex synthesis, the paper ledger, background agent, champion/challenger registry, deterministic risk, and separate macOS Keychain slots for Binance and AI credentials.
 
 Live mode is intentionally visible but locked. This release cannot submit a real order.
 
@@ -66,6 +66,20 @@ npm run desktop:build
 On macOS, the app bundle is written to `desktop/src-tauri/target/release/bundle/macos/BerkshireNexus.app`, with a disk image under the adjacent `dmg/` directory. See [`PRODUCT.md`](PRODUCT.md) and [`DESIGN.md`](DESIGN.md) for the product and visual contracts.
 
 To configure Binance, create a read-only API Key in the official Binance website or app, then open **Settings** in BerkshireNexus and store it in macOS Keychain. Do not enable trading, futures, or withdrawal permissions, and never send the key through chat, screenshots, issues, or committed files. Account setup, identity verification, Stocks eligibility, key creation, and permissions still happen in Binance's official UI. The desktop app can store/delete the key and run a read-only preflight.
+
+### Current data, news, and AI providers
+
+Open **Research**, enter tickers such as `AAPL MSFT NVDA`, and run a study. Each memo separately displays the latest available price and timestamp, fundamentals period, provider trace, fallback fields, current news with evidence IDs and original URLs, and optional AI synthesis.
+
+Open **AI Research** to choose one of three providers:
+
+- **OpenAI-compatible**: configure a model and base URL, then save the provider key in macOS Keychain. This works with Chat Completions-compatible OpenAI, OpenRouter, DeepSeek, and similar services.
+- **Ollama**: use a local endpoint such as `http://127.0.0.1:11434`; BerkshireNexus needs no key.
+- **Codex CLI**: uses the machine's existing Codex login. Every ticker launches a separate ephemeral, read-only `codex exec` request and consumes the user's Codex allowance; it does not inherit this chat.
+
+AI is optional. Quotes and news continue to work while AI is disabled. The model only receives retrieved evidence, must cite news evidence IDs, and cannot alter deterministic scores or execution controls. Provider, model, prompt version, latency, returned token usage, citations, and errors are persisted in cycle audits.
+
+“Current” is not treated as “broker-authoritative.” Yahoo/Nasdaq records carry source timestamps and a `third-party-complete`, `third-party-degraded`, or `offline-fallback` level. Even complete third-party records have `is_authoritative=false`, so deterministic Live risk rejects them for a real buy. Binance holdings, cash, restart recovery, and order reconciliation are still required before Live mode can unlock.
 
 ### Audited adaptive paper-trading agent
 
@@ -103,7 +117,7 @@ python3 -m src.cli binance-preflight AAPL MSFT
 
 There is intentionally no one-click live CLI yet. Safe autonomous execution still requires authoritative Binance cash/holding snapshots, order reconciliation, and restart recovery. The isolated `BinanceStocksClient` can build signed orders, but `place_order()` requires both `allow_live_orders=True` and `BERKSHIRE_NEXUS_LIVE_TRADING=I_ACKNOWLEDGE_REAL_MONEY`. It always submits direct equities with `tokenize=false`.
 
-Every order must pass deterministic controls outside the learned model: a 10% position cap, 25% daily turnover cap, 1% daily-loss kill switch, no live market orders by default, and no live buys from fallback/inferred research data. Valid risk-reducing sells remain possible after a kill switch. Binance eligibility, regional, PDT, session, and disclaimer requirements still apply. No documented Stocks testnet is assumed, so local paper trading is the mandatory first stage.
+Every order must pass deterministic controls outside the learned model: a 10% position cap, 25% daily turnover cap, 1% daily-loss kill switch, no live market orders by default, and no live buys from fallback, inferred, or non-authoritative third-party research data. Valid risk-reducing sells remain possible after a kill switch. Binance eligibility, regional, PDT, session, and disclaimer requirements still apply. No documented Stocks testnet is assumed, so local paper trading is the mandatory first stage.
 
 ### 1. Cross-Sectional Comparison (`compare`)
 

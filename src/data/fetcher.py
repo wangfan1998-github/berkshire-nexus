@@ -1,12 +1,17 @@
-"""Real-time financial and market data fetcher with zero-authentication and zero external dependencies."""
+"""Current US-equity market data with explicit provenance and safe fallbacks."""
 
 from __future__ import annotations
 
 import json
+import math
+import threading
+import time
+import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 @dataclass
@@ -32,6 +37,18 @@ class CompanyFinancials:
     data_source: str = "unknown"
     as_of_utc: str = ""
     uses_fallback_data: bool = True
+    currency: str = "USD"
+    exchange: str = ""
+    market_status: str = "UNKNOWN"
+    previous_close: float = 0.0
+    price_change_pct: float = 0.0
+    quote_as_of_utc: str = ""
+    fundamentals_as_of: str = ""
+    verification_level: str = "unverified"
+    is_authoritative: bool = False
+    market_data_age_seconds: Optional[int] = None
+    fallback_fields: List[str] = field(default_factory=list)
+    source_trace: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # Default fallback profile metrics for standard tech/macro universe
@@ -159,71 +176,493 @@ _PRESET_DATA: Dict[str, Dict[str, Any]] = {
 
 
 class DataFetcher:
-    """Fetches real-time market data with network endpoints and local fallback cache."""
+    """Route quote/history and fundamentals through independent providers.
 
-    def __init__(self, timeout: int = 5):
+    Yahoo Finance chart data supplies the latest available quote and one-year
+    history. Nasdaq supplies annual statements, EPS history, and the company
+    profile. Neither is treated as broker-authoritative execution data.
+    """
+
+    def __init__(self, timeout: int = 8):
         self.timeout = timeout
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 Safari/537.36"
+            ),
+            "Accept": "application/json,text/plain,*/*",
         }
+        self.nasdaq_headers = {
+            **self.headers,
+            "Origin": "https://www.nasdaq.com",
+            "Referer": "https://www.nasdaq.com/",
+        }
+        self._benchmark: Optional[Tuple[List[int], List[float]]] = None
+        self._benchmark_lock = threading.Lock()
 
     def fetch_quote(self, ticker: str) -> CompanyFinancials:
-        """Fetch quote and fundamentals for a given ticker."""
+        """Fetch one coherent record and disclose every substituted field."""
+
         sym = ticker.upper().strip()
-        data = _PRESET_DATA.get(sym, {}).copy()
-        quote_source = "curated-preset" if sym in _PRESET_DATA else "heuristic-fallback"
-        network_quote_loaded = False
+        if not sym:
+            raise ValueError("ticker is required")
+        fallback = _PRESET_DATA.get(sym, {}).copy()
+        data: Dict[str, Any] = {}
+        trace: List[Dict[str, Any]] = []
+        fallback_fields: List[str] = []
+        retrieved_at = datetime.now(timezone.utc).isoformat()
+        chart_history: Tuple[List[int], List[float]] = ([], [])
 
-        # Try online endpoint
+        chart_started = time.monotonic()
         try:
-            url = f"https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols={sym}&fund=1&output=json"
-            req = urllib.request.Request(url, headers=self.headers)
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = json.loads(resp.read().decode("utf-8"))
-                fq_list = raw.get("FormattedQuoteResult", {}).get("FormattedQuote", [])
-                if fq_list:
-                    item = fq_list[0]
-                    if item.get("last"):
-                        data["price"] = float(str(item.get("last")).replace(",", ""))
-                    if item.get("name"):
-                        data["name"] = item.get("name")
-                    if item.get("pe"):
-                        data["pe"] = float(item.get("pe"))
-                    if item.get("eps"):
-                        data["eps"] = float(item.get("eps"))
-                    if item.get("beta"):
-                        data["beta"] = float(item.get("beta"))
-                    network_quote_loaded = bool(item.get("last"))
-                    if network_quote_loaded:
-                        quote_source = "cnbc-quote+curated-fundamentals" if sym in _PRESET_DATA else "cnbc-quote+heuristic-fundamentals"
-        except Exception:
-            # Silently use cached/interpolated data
-            pass
+            chart, chart_history = self._yahoo_chart(sym)
+            data.update(chart)
+            trace.append(self._trace(
+                provider="yahoo-finance-chart",
+                kind="quote+history",
+                status="ok",
+                started=chart_started,
+                as_of=str(chart.get("quote_as_of_utc", "")),
+                fields=[
+                    "price", "previous_close", "fifty_two_week_high",
+                    "fifty_two_week_low", "market_status",
+                ],
+            ))
+        except Exception as error:
+            trace.append(self._trace(
+                provider="yahoo-finance-chart",
+                kind="quote+history",
+                status="error",
+                started=chart_started,
+                message=self._safe_error(error),
+            ))
 
-        # Build model
+        nasdaq_started = time.monotonic()
+        try:
+            fundamentals = self._nasdaq_bundle(sym)
+            data.update(fundamentals)
+            if data.get("price") and float(data.get("_ttm_eps", 0.0)) > 0.0:
+                data["pe"] = float(data["price"]) / float(data["_ttm_eps"])
+            if data.get("price") and float(data.get("_forward_eps", 0.0)) > 0.0:
+                data["forward_pe"] = float(data["price"]) / float(data["_forward_eps"])
+            trace.append(self._trace(
+                provider="nasdaq-public-api",
+                kind="fundamentals+profile",
+                status="ok",
+                started=nasdaq_started,
+                as_of=str(fundamentals.get("fundamentals_as_of", "")),
+                fields=[
+                    "market_cap", "eps", "forward_pe", "revenue_growth_yoy",
+                    "gross_margin", "operating_margin", "fcf_yield", "roe",
+                    "debt_to_equity", "sector", "description",
+                ],
+            ))
+        except Exception as error:
+            trace.append(self._trace(
+                provider="nasdaq-public-api",
+                kind="fundamentals+profile",
+                status="error",
+                started=nasdaq_started,
+                message=self._safe_error(error),
+            ))
+
+        beta_started = time.monotonic()
+        try:
+            beta = self._calculate_beta(sym, chart_history)
+            if beta is not None:
+                data["beta"] = beta
+                trace.append(self._trace(
+                    provider="yahoo-finance-chart",
+                    kind="derived-beta-vs-spy",
+                    status="ok",
+                    started=beta_started,
+                    fields=["beta"],
+                ))
+        except Exception as error:
+            trace.append(self._trace(
+                provider="yahoo-finance-chart",
+                kind="derived-beta-vs-spy",
+                status="error",
+                started=beta_started,
+                message=self._safe_error(error),
+            ))
+
+        defaults: Dict[str, Any] = {
+            "name": f"{sym} Inc.",
+            "price": 100.0,
+            "pe": 20.0,
+            "forward_pe": 20.0,
+            "eps": 5.0,
+            "beta": 1.0,
+            "market_cap": 50e9,
+            "revenue_growth_yoy": 0.12,
+            "gross_margin": 0.50,
+            "operating_margin": 0.20,
+            "fcf_yield": 0.04,
+            "roe": 0.15,
+            "debt_to_equity": 0.50,
+            "sector": "Unknown / Unclassified",
+            "description": "No verified company description was returned.",
+        }
+        for field_name, default in defaults.items():
+            if not self._field_present(field_name, data.get(field_name)):
+                data[field_name] = fallback.get(field_name, default)
+                fallback_fields.append(field_name)
+
+        if not self._present(data.get("forward_pe")):
+            data["forward_pe"] = data["pe"]
+        if not self._present(data.get("fifty_two_week_high")):
+            data["fifty_two_week_high"] = float(data["price"]) * 1.15
+            fallback_fields.append("fifty_two_week_high")
+        if not self._present(data.get("fifty_two_week_low")):
+            data["fifty_two_week_low"] = float(data["price"]) * 0.85
+            fallback_fields.append("fifty_two_week_low")
+
+        fallback_fields = sorted(set(fallback_fields))
+        network_quote = bool(data.get("quote_as_of_utc"))
+        network_fundamentals = bool(data.get("fundamentals_as_of"))
+        if network_quote and network_fundamentals and not fallback_fields:
+            level = "third-party-complete"
+        elif network_quote or network_fundamentals:
+            level = "third-party-degraded"
+        else:
+            level = "offline-fallback"
+        sources = []
+        if network_quote:
+            sources.append("yahoo-chart")
+        if network_fundamentals:
+            sources.append("nasdaq-fundamentals")
+        if fallback_fields:
+            sources.append("curated/heuristic-fallback")
+
         return CompanyFinancials(
             ticker=sym,
-            name=data.get("name", f"{sym} Inc."),
-            price=data.get("price", 100.0),
-            pe=data.get("pe", 20.0),
-            forward_pe=data.get("forward_pe", data.get("pe", 20.0)),
-            eps=data.get("eps", max(data.get("price", 100.0) / max(data.get("pe", 20.0), 1.0), 0.1)),
-            beta=data.get("beta", 1.0),
-            market_cap=data.get("market_cap", 50e9),
-            revenue_growth_yoy=data.get("revenue_growth_yoy", 0.12),
-            gross_margin=data.get("gross_margin", 0.50),
-            operating_margin=data.get("operating_margin", 0.20),
-            fcf_yield=data.get("fcf_yield", 0.04),
-            roe=data.get("roe", 0.15),
-            debt_to_equity=data.get("debt_to_equity", 0.50),
-            fifty_two_week_high=data.get("fifty_two_week_high", data.get("price", 100.0) * 1.15),
-            fifty_two_week_low=data.get("fifty_two_week_low", data.get("price", 100.0) * 0.85),
-            sector=data.get("sector", "General Tech"),
-            description=data.get("description", "Publicly traded company."),
-            data_source=quote_source,
-            as_of_utc=datetime.now(timezone.utc).isoformat(),
-            # CNBC only supplies a subset of the fields consumed by the analysis.
-            # Until a point-in-time fundamentals provider is connected, the
-            # resulting record is unsuitable for unattended live execution.
-            uses_fallback_data=True,
+            name=str(data["name"]),
+            price=float(data["price"]),
+            pe=float(data["pe"]),
+            forward_pe=float(data["forward_pe"]),
+            eps=float(data["eps"]),
+            beta=float(data["beta"]),
+            market_cap=float(data["market_cap"]),
+            revenue_growth_yoy=float(data["revenue_growth_yoy"]),
+            gross_margin=float(data["gross_margin"]),
+            operating_margin=float(data["operating_margin"]),
+            fcf_yield=float(data["fcf_yield"]),
+            roe=float(data["roe"]),
+            debt_to_equity=float(data["debt_to_equity"]),
+            fifty_two_week_high=float(data["fifty_two_week_high"]),
+            fifty_two_week_low=float(data["fifty_two_week_low"]),
+            sector=str(data["sector"]),
+            description=str(data["description"]),
+            data_source="+".join(sources) or "offline-fallback",
+            as_of_utc=str(data.get("quote_as_of_utc") or retrieved_at),
+            uses_fallback_data=bool(fallback_fields),
+            currency=str(data.get("currency", "USD")),
+            exchange=str(data.get("exchange", "")),
+            market_status=str(data.get("market_status", "UNKNOWN")),
+            previous_close=float(data.get("previous_close", 0.0) or 0.0),
+            price_change_pct=float(data.get("price_change_pct", 0.0) or 0.0),
+            quote_as_of_utc=str(data.get("quote_as_of_utc", "")),
+            fundamentals_as_of=str(data.get("fundamentals_as_of", "")),
+            verification_level=level,
+            # Public research feeds are never equivalent to a signed broker
+            # account/order response, even when every requested field exists.
+            is_authoritative=False,
+            market_data_age_seconds=data.get("market_data_age_seconds"),
+            fallback_fields=fallback_fields,
+            source_trace=trace,
         )
+
+    def _yahoo_chart(self, ticker: str) -> Tuple[Dict[str, Any], Tuple[List[int], List[float]]]:
+        encoded = urllib.parse.quote(ticker, safe="")
+        url = (
+            "https://query1.finance.yahoo.com/v8/finance/chart/"
+            f"{encoded}?range=1y&interval=1d&events=div%2Csplits"
+        )
+        payload = self._json(url, self.headers)
+        result = list(payload.get("chart", {}).get("result") or [])
+        if not result:
+            message = payload.get("chart", {}).get("error")
+            raise ValueError(f"Yahoo chart returned no result: {message}")
+        chart = dict(result[0])
+        meta = dict(chart.get("meta", {}))
+        timestamps = [int(value) for value in chart.get("timestamp", [])]
+        quote_sets = list(chart.get("indicators", {}).get("quote", []))
+        closes_raw = list(quote_sets[0].get("close", [])) if quote_sets else []
+        history = [
+            (stamp, float(close))
+            for stamp, close in zip(timestamps, closes_raw)
+            if close is not None and math.isfinite(float(close)) and float(close) > 0.0
+        ]
+        price = self._number(meta.get("regularMarketPrice"))
+        if not price and history:
+            price = history[-1][1]
+        if not price:
+            raise ValueError("Yahoo chart returned no current price")
+        previous = history[-2][1] if len(history) >= 2 else self._number(meta.get("chartPreviousClose"))
+        market_epoch = int(meta.get("regularMarketTime") or (history[-1][0] if history else 0))
+        as_of = datetime.fromtimestamp(market_epoch, tz=timezone.utc).isoformat() if market_epoch else ""
+        current_period = dict(meta.get("currentTradingPeriod", {}).get("regular", {}))
+        now_epoch = int(datetime.now(timezone.utc).timestamp())
+        market_open = int(current_period.get("start", 0)) <= now_epoch <= int(current_period.get("end", 0))
+        return ({
+            "name": meta.get("longName") or meta.get("shortName"),
+            "price": price,
+            "previous_close": previous or 0.0,
+            "price_change_pct": ((price / previous - 1.0) * 100.0) if previous else 0.0,
+            "fifty_two_week_high": self._number(meta.get("fiftyTwoWeekHigh")),
+            "fifty_two_week_low": self._number(meta.get("fiftyTwoWeekLow")),
+            "currency": meta.get("currency") or "USD",
+            "exchange": meta.get("fullExchangeName") or meta.get("exchangeName") or "",
+            "market_status": "OPEN" if market_open else "CLOSED",
+            "quote_as_of_utc": as_of,
+            "market_data_age_seconds": max(0, now_epoch - market_epoch) if market_epoch else None,
+        }, ([item[0] for item in history], [item[1] for item in history]))
+
+    def _nasdaq_bundle(self, ticker: str) -> Dict[str, Any]:
+        endpoints = {
+            "summary": f"https://api.nasdaq.com/api/quote/{ticker}/summary?assetclass=stocks",
+            "financials": f"https://api.nasdaq.com/api/company/{ticker}/financials?frequency=1",
+            "profile": f"https://api.nasdaq.com/api/company/{ticker}/company-profile",
+            "eps": f"https://api.nasdaq.com/api/quote/{ticker}/eps?assetclass=stocks",
+        }
+        payloads: Dict[str, Dict[str, Any]] = {}
+        errors: List[str] = []
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            future_map = {
+                executor.submit(self._json, url, self.nasdaq_headers): name
+                for name, url in endpoints.items()
+            }
+            for future in as_completed(future_map):
+                name = future_map[future]
+                try:
+                    payload = future.result()
+                    data = payload.get("data")
+                    if not isinstance(data, dict):
+                        raise ValueError("response has no data object")
+                    payloads[name] = data
+                except Exception as error:
+                    errors.append(f"{name}: {self._safe_error(error)}")
+        if "financials" not in payloads or "summary" not in payloads:
+            raise ValueError("; ".join(errors) or "Nasdaq fundamentals are unavailable")
+
+        summary = dict(payloads["summary"].get("summaryData", {}))
+        financials = payloads["financials"]
+        profile = payloads.get("profile", {})
+        eps_payload = payloads.get("eps", {})
+        income = self._statement_rows(financials.get("incomeStatementTable", {}))
+        balance = self._statement_rows(financials.get("balanceSheetTable", {}))
+        cashflow = self._statement_rows(financials.get("cashFlowTable", {}))
+        headers = dict(financials.get("incomeStatementTable", {}).get("headers", {}))
+
+        revenue_latest = self._statement_number(income, "Total Revenue", "value2")
+        revenue_prior = self._statement_number(income, "Total Revenue", "value3")
+        gross_profit = self._statement_number(income, "Gross Profit", "value2")
+        operating_income = self._statement_number(income, "Operating Income", "value2")
+        net_income = self._statement_number(income, "Net Income", "value2")
+        equity = self._statement_number(balance, "Total Equity", "value2")
+        short_debt = self._statement_number(
+            balance,
+            "Short-Term Debt / Current Portion of Long-Term Debt",
+            "value2",
+        )
+        long_debt = self._statement_number(balance, "Long-Term Debt", "value2")
+        operating_cash = self._statement_number(cashflow, "Net Cash Flow-Operating", "value2")
+        capex = self._statement_number(cashflow, "Capital Expenditures", "value2")
+        market_cap = self._number(self._summary_value(summary, "MarketCap"))
+
+        historical_eps = [
+            self._number(item.get("earnings"))
+            for item in eps_payload.get("earningsPerShare", [])
+            if item.get("type") == "PreviousQuarter"
+        ]
+        forward_eps = [
+            self._number(item.get("consensus"))
+            for item in eps_payload.get("earningsPerShare", [])
+            if item.get("type") == "UpcomingQuarter"
+        ]
+        ttm_eps = sum(value for value in historical_eps[-4:] if value is not None)
+        next_eps = sum(value for value in forward_eps[:4] if value is not None)
+
+        result: Dict[str, Any] = {
+            "market_cap": market_cap,
+            "revenue_growth_yoy": self._ratio_change(revenue_latest, revenue_prior),
+            "gross_margin": self._ratio(gross_profit, revenue_latest),
+            "operating_margin": self._ratio(operating_income, revenue_latest),
+            "fcf_yield": self._ratio(
+                (operating_cash or 0.0) + (capex or 0.0), market_cap
+            ),
+            "roe": self._ratio(net_income, equity),
+            "debt_to_equity": self._ratio(
+                (short_debt or 0.0) + (long_debt or 0.0), equity
+            ),
+            "eps": ttm_eps or None,
+            "fundamentals_as_of": str(headers.get("value2", "")),
+            "name": self._profile_value(profile, "CompanyName"),
+            "sector": self._profile_value(profile, "Sector")
+                or self._summary_value(summary, "Sector"),
+            "description": self._profile_value(profile, "CompanyDescription"),
+        }
+        if ttm_eps:
+            # Price is merged later, so defer PE calculation with raw EPS marker.
+            result["_ttm_eps"] = ttm_eps
+        if next_eps:
+            result["_forward_eps"] = next_eps
+        return {key: value for key, value in result.items() if self._present(value)}
+
+    def _calculate_beta(
+        self,
+        ticker: str,
+        history: Tuple[List[int], List[float]],
+    ) -> Optional[float]:
+        if ticker == "SPY":
+            return 1.0
+        if len(history[0]) < 30:
+            return None
+        if self._benchmark is None:
+            with self._benchmark_lock:
+                if self._benchmark is None:
+                    _, self._benchmark = self._yahoo_chart("SPY")
+        benchmark = self._benchmark
+        stock_prices = dict(zip(history[0], history[1]))
+        market_prices = dict(zip(benchmark[0], benchmark[1]))
+        common = sorted(set(stock_prices).intersection(market_prices))
+        if len(common) < 30:
+            return None
+        stock_returns: List[float] = []
+        market_returns: List[float] = []
+        for previous, current in zip(common, common[1:]):
+            stock_before, stock_after = stock_prices[previous], stock_prices[current]
+            market_before, market_after = market_prices[previous], market_prices[current]
+            if min(stock_before, stock_after, market_before, market_after) <= 0.0:
+                continue
+            stock_returns.append(stock_after / stock_before - 1.0)
+            market_returns.append(market_after / market_before - 1.0)
+        if len(stock_returns) < 20:
+            return None
+        market_mean = sum(market_returns) / len(market_returns)
+        stock_mean = sum(stock_returns) / len(stock_returns)
+        covariance = sum(
+            (stock - stock_mean) * (market - market_mean)
+            for stock, market in zip(stock_returns, market_returns)
+        )
+        variance = sum((value - market_mean) ** 2 for value in market_returns)
+        if variance <= 1e-12:
+            return None
+        return round(min(max(covariance / variance, 0.05), 5.0), 4)
+
+    def _json(self, url: str, headers: Dict[str, str]) -> Dict[str, Any]:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            value = json.loads(response.read().decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("provider response is not a JSON object")
+        return value
+
+    @staticmethod
+    def _statement_rows(table: Any) -> Dict[str, Dict[str, Any]]:
+        if not isinstance(table, dict):
+            return {}
+        return {
+            str(row.get("value1", "")).strip(): dict(row)
+            for row in table.get("rows", [])
+            if isinstance(row, dict) and str(row.get("value1", "")).strip()
+        }
+
+    @classmethod
+    def _statement_number(
+        cls,
+        rows: Dict[str, Dict[str, Any]],
+        label: str,
+        column: str,
+    ) -> Optional[float]:
+        value = cls._number(rows.get(label, {}).get(column))
+        # Nasdaq financial statements are expressed in thousands of dollars.
+        return value * 1000.0 if value is not None else None
+
+    @staticmethod
+    def _summary_value(summary: Dict[str, Any], key: str) -> Any:
+        value = summary.get(key, {})
+        return value.get("value") if isinstance(value, dict) else value
+
+    @staticmethod
+    def _profile_value(profile: Dict[str, Any], key: str) -> Any:
+        value = profile.get(key, {})
+        return value.get("value") if isinstance(value, dict) else value
+
+    @staticmethod
+    def _number(value: Any) -> Optional[float]:
+        if value is None or value is False:
+            return None
+        if isinstance(value, (int, float)):
+            result = float(value)
+            return result if math.isfinite(result) else None
+        normalized = str(value).strip().replace(",", "").replace("$", "").replace("%", "")
+        if not normalized or normalized in {"--", "N/A", "NA"}:
+            return None
+        sign = -1.0 if normalized.startswith("-") else 1.0
+        normalized = normalized.lstrip("+-")
+        multiplier = 1.0
+        if normalized[-1:].upper() in {"K", "M", "B", "T"}:
+            multiplier = {"K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}[normalized[-1].upper()]
+            normalized = normalized[:-1]
+        try:
+            return sign * float(normalized) * multiplier
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _ratio(numerator: Optional[float], denominator: Optional[float]) -> Optional[float]:
+        if numerator is None or denominator is None or abs(denominator) <= 1e-12:
+            return None
+        return numerator / denominator
+
+    @classmethod
+    def _ratio_change(cls, current: Optional[float], previous: Optional[float]) -> Optional[float]:
+        ratio = cls._ratio(current, previous)
+        return ratio - 1.0 if ratio is not None else None
+
+    @staticmethod
+    def _present(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (int, float)):
+            return math.isfinite(float(value))
+        return True
+
+    @classmethod
+    def _field_present(cls, field_name: str, value: Any) -> bool:
+        if not cls._present(value):
+            return False
+        if field_name in {"price", "pe", "forward_pe", "eps", "market_cap"}:
+            return float(value) > 0.0
+        return True
+
+    @staticmethod
+    def _trace(
+        *,
+        provider: str,
+        kind: str,
+        status: str,
+        started: float,
+        as_of: str = "",
+        fields: Optional[Sequence[str]] = None,
+        message: str = "",
+    ) -> Dict[str, Any]:
+        return {
+            "provider": provider,
+            "kind": kind,
+            "status": status,
+            "as_of_utc": as_of,
+            "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "fields": list(fields or []),
+            "message": message,
+        }
+
+    @staticmethod
+    def _safe_error(error: Exception) -> str:
+        message = str(error).replace("\n", " ").strip()
+        return message[:300] or error.__class__.__name__

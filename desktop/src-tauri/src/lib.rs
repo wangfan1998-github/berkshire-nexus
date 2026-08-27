@@ -9,10 +9,20 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 
 const KEYRING_SERVICE: &str = "com.berkshire.nexus";
-const KEYRING_ACCOUNT: &str = "binance-api-key";
+const BINANCE_KEYRING_ACCOUNT: &str = "binance-api-key";
+const AI_KEYRING_ACCOUNT: &str = "ai-provider-api-key";
 
 #[derive(Default)]
 struct AgentProcess(Mutex<Option<Child>>);
+
+#[derive(serde::Deserialize)]
+struct AgentStartOptions {
+    interval_minutes: f64,
+    initial_cash: f64,
+    auto_promote_paper: bool,
+    risk_config: Value,
+    research_config: Value,
+}
 
 struct PythonContext {
     executable: String,
@@ -80,12 +90,16 @@ fn command_base(app: &AppHandle) -> Result<(Command, PathBuf), String> {
 fn run_json_command(
     app: &AppHandle,
     arguments: &[String],
-    api_key: Option<&str>,
+    binance_api_key: Option<&str>,
+    ai_api_key: Option<&str>,
 ) -> Result<Value, String> {
     let (mut command, _) = command_base(app)?;
     command.args(arguments);
-    if let Some(value) = api_key {
+    if let Some(value) = binance_api_key {
         command.env("BINANCE_API_KEY", value);
+    }
+    if let Some(value) = ai_api_key {
+        command.env("BERKSHIRE_NEXUS_AI_API_KEY", value);
     }
     let output = command
         .output()
@@ -105,14 +119,21 @@ fn run_json_command(
 
 #[tauri::command]
 fn app_snapshot(app: AppHandle) -> Result<Value, String> {
-    run_json_command(&app, &["snapshot".to_string()], None)
+    run_json_command(&app, &["snapshot".to_string()], None, None)
 }
 
 #[tauri::command]
-fn analyze_tickers(app: AppHandle, tickers: Vec<String>) -> Result<Value, String> {
+fn analyze_tickers(
+    app: AppHandle,
+    tickers: Vec<String>,
+    research_config: Value,
+) -> Result<Value, String> {
     let mut arguments = vec!["analyze".to_string()];
     arguments.extend(tickers);
-    run_json_command(&app, &arguments, None)
+    arguments.push("--research-config-json".to_string());
+    arguments.push(serde_json::to_string(&research_config).map_err(|error| error.to_string())?);
+    let ai_key = ai_key_for_config(&research_config, false)?;
+    run_json_command(&app, &arguments, None, ai_key.as_deref())
 }
 
 #[tauri::command]
@@ -122,6 +143,7 @@ fn run_paper_cycle(
     initial_cash: f64,
     auto_promote_paper: bool,
     risk_config: Value,
+    research_config: Value,
 ) -> Result<Value, String> {
     let mut arguments = vec!["cycle".to_string()];
     arguments.extend(tickers);
@@ -132,7 +154,10 @@ fn run_paper_cycle(
     }
     arguments.push("--risk-config-json".to_string());
     arguments.push(serde_json::to_string(&risk_config).map_err(|error| error.to_string())?);
-    run_json_command(&app, &arguments, None)
+    arguments.push("--research-config-json".to_string());
+    arguments.push(serde_json::to_string(&research_config).map_err(|error| error.to_string())?);
+    let ai_key = ai_key_for_config(&research_config, false)?;
+    run_json_command(&app, &arguments, None, ai_key.as_deref())
 }
 
 #[tauri::command]
@@ -166,12 +191,37 @@ fn save_desktop_settings(app: AppHandle, settings: Value) -> Result<Value, Strin
 
 #[tauri::command]
 fn promote_model(app: AppHandle) -> Result<Value, String> {
-    run_json_command(&app, &["model-promote".to_string()], None)
+    run_json_command(&app, &["model-promote".to_string()], None, None)
 }
 
-fn keyring_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYRING_SERVICE, account)
         .map_err(|error| format!("Could not access the operating system credential store: {error}"))
+}
+
+fn optional_key(account: &str) -> Result<Option<String>, String> {
+    match keyring_entry(account)?.get_password() {
+        Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+        Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!("Could not read credential status: {error}")),
+    }
+}
+
+fn ai_key_for_config(config: &Value, force_enabled: bool) -> Result<Option<String>, String> {
+    let enabled = force_enabled
+        || config
+            .get("ai_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    let provider = config
+        .get("ai_provider")
+        .and_then(Value::as_str)
+        .unwrap_or("openai-compatible");
+    if enabled && provider == "openai-compatible" {
+        optional_key(AI_KEYRING_ACCOUNT)
+    } else {
+        Ok(None)
+    }
 }
 
 #[tauri::command]
@@ -180,7 +230,7 @@ fn save_binance_key(api_key: String) -> Result<Value, String> {
     if normalized.len() < 16 {
         return Err("The Binance API Key appears incomplete".to_string());
     }
-    keyring_entry()?
+    keyring_entry(BINANCE_KEYRING_ACCOUNT)?
         .set_password(normalized)
         .map_err(|error| format!("Could not save the Binance API Key: {error}"))?;
     Ok(json!({"configured": true}))
@@ -188,7 +238,7 @@ fn save_binance_key(api_key: String) -> Result<Value, String> {
 
 #[tauri::command]
 fn delete_binance_key() -> Result<Value, String> {
-    match keyring_entry()?.delete_credential() {
+    match keyring_entry(BINANCE_KEYRING_ACCOUNT)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(json!({"configured": false})),
         Err(error) => Err(format!("Could not remove the Binance API Key: {error}")),
     }
@@ -196,7 +246,7 @@ fn delete_binance_key() -> Result<Value, String> {
 
 #[tauri::command]
 fn binance_key_status() -> Result<Value, String> {
-    match keyring_entry()?.get_password() {
+    match keyring_entry(BINANCE_KEYRING_ACCOUNT)?.get_password() {
         Ok(value) => Ok(json!({"configured": !value.trim().is_empty()})),
         Err(keyring::Error::NoEntry) => Ok(json!({"configured": false})),
         Err(error) => Err(format!("Could not read Binance credential status: {error}")),
@@ -205,7 +255,7 @@ fn binance_key_status() -> Result<Value, String> {
 
 #[tauri::command]
 fn binance_preflight(app: AppHandle, tickers: Vec<String>) -> Result<Value, String> {
-    let api_key = keyring_entry()?
+    let api_key = keyring_entry(BINANCE_KEYRING_ACCOUNT)?
         .get_password()
         .map_err(|error| match error {
             keyring::Error::NoEntry => {
@@ -215,7 +265,43 @@ fn binance_preflight(app: AppHandle, tickers: Vec<String>) -> Result<Value, Stri
         })?;
     let mut arguments = vec!["binance-preflight".to_string()];
     arguments.extend(tickers);
-    run_json_command(&app, &arguments, Some(&api_key))
+    run_json_command(&app, &arguments, Some(&api_key), None)
+}
+
+#[tauri::command]
+fn save_ai_key(api_key: String) -> Result<Value, String> {
+    let normalized = api_key.trim();
+    if normalized.len() < 8 {
+        return Err("The AI provider API Key appears incomplete".to_string());
+    }
+    keyring_entry(AI_KEYRING_ACCOUNT)?
+        .set_password(normalized)
+        .map_err(|error| format!("Could not save the AI provider API Key: {error}"))?;
+    Ok(json!({"configured": true}))
+}
+
+#[tauri::command]
+fn delete_ai_key() -> Result<Value, String> {
+    match keyring_entry(AI_KEYRING_ACCOUNT)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(json!({"configured": false})),
+        Err(error) => Err(format!("Could not remove the AI provider API Key: {error}")),
+    }
+}
+
+#[tauri::command]
+fn ai_key_status() -> Result<Value, String> {
+    Ok(json!({"configured": optional_key(AI_KEYRING_ACCOUNT)?.is_some()}))
+}
+
+#[tauri::command]
+fn test_ai_provider(app: AppHandle, research_config: Value) -> Result<Value, String> {
+    let arguments = vec![
+        "test-ai".to_string(),
+        "--research-config-json".to_string(),
+        serde_json::to_string(&research_config).map_err(|error| error.to_string())?,
+    ];
+    let ai_key = ai_key_for_config(&research_config, true)?;
+    run_json_command(&app, &arguments, None, ai_key.as_deref())
 }
 
 fn write_stopped_status(app: &AppHandle, reason: &str) -> Result<(), String> {
@@ -253,11 +339,15 @@ fn start_agent(
     app: AppHandle,
     state: State<'_, AgentProcess>,
     tickers: Vec<String>,
-    interval_minutes: f64,
-    initial_cash: f64,
-    auto_promote_paper: bool,
-    risk_config: Value,
+    options: AgentStartOptions,
 ) -> Result<Value, String> {
+    let AgentStartOptions {
+        interval_minutes,
+        initial_cash,
+        auto_promote_paper,
+        risk_config,
+        research_config,
+    } = options;
     if interval_minutes < 1.0 {
         return Err("The cycle interval must be at least one minute".to_string());
     }
@@ -297,8 +387,13 @@ fn start_agent(
         .arg(initial_cash.to_string())
         .arg("--risk-config-json")
         .arg(serde_json::to_string(&risk_config).map_err(|error| error.to_string())?)
+        .arg("--research-config-json")
+        .arg(serde_json::to_string(&research_config).map_err(|error| error.to_string())?)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    if let Some(ai_key) = ai_key_for_config(&research_config, false)? {
+        command.env("BERKSHIRE_NEXUS_AI_API_KEY", ai_key);
+    }
     if auto_promote_paper {
         command.arg("--auto-promote-paper");
     }
@@ -390,6 +485,10 @@ pub fn run() {
             delete_binance_key,
             binance_key_status,
             binance_preflight,
+            save_ai_key,
+            delete_ai_key,
+            ai_key_status,
+            test_ai_provider,
             start_agent,
             stop_agent,
             agent_runtime_status,

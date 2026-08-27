@@ -13,6 +13,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 from ..agent.cycle import PaperTradingAgent
 from ..core.orchestrator import ComprehensiveAnalysisReport, OmniAlphaOrchestrator
 from ..learning.registry import ChampionChallengerRegistry
+from ..research.ai import AIResearchService
+from ..research.config import ResearchConfig
 from ..trading.binance_stocks import BinanceStocksClient
 from ..trading.risk import RiskPolicy
 
@@ -120,9 +122,16 @@ class DesktopService:
             } if last_cycle else None,
         })
 
-    def analyze(self, tickers: Sequence[str]) -> Dict[str, Any]:
+    def analyze(
+        self,
+        tickers: Sequence[str],
+        *,
+        research_config: Optional[Dict[str, Any]] = None,
+        ai_api_key: str = "",
+    ) -> Dict[str, Any]:
         normalized = self._tickers(tickers)
-        reports = OmniAlphaOrchestrator().compare_multiple(normalized)
+        config = ResearchConfig.from_dict(research_config or {})
+        reports = OmniAlphaOrchestrator(config, ai_api_key).compare_multiple(normalized)
         return json_safe({
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "reports": [self._report(report) for report in reports],
@@ -135,9 +144,12 @@ class DesktopService:
         initial_cash: float = 100_000.0,
         auto_promote_paper: bool = False,
         risk_config: Optional[Dict[str, Any]] = None,
+        research_config: Optional[Dict[str, Any]] = None,
+        ai_api_key: str = "",
     ) -> Dict[str, Any]:
         normalized = self._tickers(tickers)
-        reports = OmniAlphaOrchestrator().compare_multiple(normalized)
+        config = ResearchConfig.from_dict(research_config or {})
+        reports = OmniAlphaOrchestrator(config, ai_api_key).compare_multiple(normalized)
         result = PaperTradingAgent(
             self.state_directory,
             initial_cash=initial_cash,
@@ -153,6 +165,14 @@ class DesktopService:
     def promote_model(self) -> Dict[str, Any]:
         registry = ChampionChallengerRegistry(self.state_directory / "model_registry.json")
         return json_safe(asdict(registry.promote_challenger()))
+
+    @staticmethod
+    def test_ai_provider(
+        research_config: Dict[str, Any],
+        ai_api_key: str = "",
+    ) -> Dict[str, Any]:
+        config = ResearchConfig.from_dict({**research_config, "ai_enabled": True})
+        return json_safe(AIResearchService(config, ai_api_key).test_connection())
 
     @staticmethod
     def binance_preflight(api_key: str, tickers: Sequence[str]) -> Dict[str, Any]:
@@ -178,11 +198,25 @@ class DesktopService:
             "data_source": report.financials.data_source,
             "uses_fallback_data": report.financials.uses_fallback_data,
             "as_of_utc": report.financials.as_of_utc,
+            "currency": report.financials.currency,
+            "exchange": report.financials.exchange,
+            "market_status": report.financials.market_status,
+            "previous_close": report.financials.previous_close,
+            "price_change_pct": report.financials.price_change_pct,
+            "quote_as_of_utc": report.financials.quote_as_of_utc,
+            "fundamentals_as_of": report.financials.fundamentals_as_of,
+            "verification_level": report.financials.verification_level,
+            "is_authoritative": report.financials.is_authoritative,
+            "market_data_age_seconds": report.financials.market_data_age_seconds,
+            "fallback_fields": report.financials.fallback_fields,
+            "source_trace": report.financials.source_trace,
             "chokepoint": asdict(report.chokepoint),
             "masters": asdict(report.masters_debate),
             "valuation": asdict(report.valuation),
             "quant": asdict(report.quant_factors),
             "risk": asdict(report.risk_assessment),
+            "news": asdict(report.news),
+            "ai_research": asdict(report.ai_research),
         }
 
     def _audits(self) -> List[Dict[str, Any]]:
