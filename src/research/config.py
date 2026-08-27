@@ -7,7 +7,39 @@ from typing import Any, Dict
 from urllib.parse import urlparse
 
 
-_AI_PROVIDERS = frozenset({"openai-compatible", "ollama", "codex-cli"})
+# "openai-compatible" covers every vendor exposing /chat/completions, which is
+# how Gemini, DeepSeek, Kimi, Doubao, OpenRouter and vLLM are all reached.
+_AI_PROVIDERS = frozenset({"openai-compatible", "gemini", "ollama", "codex-cli"})
+
+# Convenience presets so the UI can fill base_url/model without the user
+# hunting for them. Gemini's endpoint verified live: an invalid key returns
+# HTTP 400 "Please pass a valid API key", so the route exists.
+AI_PRESETS = {
+    "gemini": {
+        "label": "Google Gemini",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+        "default_model": "gemini-2.5-flash",
+    },
+    "openai-compatible": {
+        "label": "OpenAI 兼容 (OpenAI / DeepSeek / Kimi / \u8c46\u5305 / OpenRouter)",
+        "base_url": "https://api.openai.com/v1",
+        "models": [],
+        "default_model": "gpt-4o-mini",
+    },
+    "ollama": {
+        "label": "Ollama (\u672c\u5730)",
+        "base_url": "http://localhost:11434",
+        "models": ["llama3.1", "qwen2.5"],
+        "default_model": "llama3.1",
+    },
+    "codex-cli": {
+        "label": "Codex CLI (\u672c\u673a\uff0c\u65e0\u9700 Key)",
+        "base_url": "",
+        "models": [],
+        "default_model": "gpt-5.1-codex",
+    },
+}
 _NEWS_PROVIDERS = frozenset({"yahoo", "yahoo-google"})
 
 
@@ -69,7 +101,7 @@ class ResearchConfig:
             raise ValueError("ai_timeout_seconds must remain between 10 and 300")
         if not 0.0 <= self.ai_temperature <= 1.0:
             raise ValueError("ai_temperature must remain between 0 and 1")
-        if self.ai_provider != "codex-cli":
+        if self.ai_provider not in {"codex-cli"}:
             parsed = urlparse(self.ai_base_url)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                 raise ValueError("ai_base_url must be an absolute HTTP(S) URL")

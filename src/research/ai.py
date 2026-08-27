@@ -66,7 +66,7 @@ class AIResearchService:
                 prompt_version=PROMPT_VERSION,
                 generated_at_utc=generated,
             )
-        if self.config.ai_provider == "openai-compatible" and not self.api_key:
+        if self.config.ai_provider in {"openai-compatible", "gemini"} and not self.api_key:
             return self._error(
                 generated,
                 "AI API Key is not configured in macOS Keychain",
@@ -76,7 +76,8 @@ class AIResearchService:
         allowed_citations = [item.evidence_id for item in news]
         prompt = self._prompt(ticker, evidence, news)
         try:
-            if self.config.ai_provider == "openai-compatible":
+            if self.config.ai_provider in {"openai-compatible", "gemini"}:
+                # Gemini exposes an OpenAI-compatible /chat/completions route.
                 raw, usage = self._openai_compatible(prompt)
             elif self.config.ai_provider == "ollama":
                 raw, usage = self._ollama(prompt)

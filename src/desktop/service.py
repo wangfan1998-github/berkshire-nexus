@@ -213,7 +213,13 @@ class DesktopService:
             allow_live_orders=allow_live_orders,
         )
 
-    def live_account(self, api_key: str, api_secret: str) -> Dict[str, Any]:
+    def live_account(
+        self,
+        api_key: str,
+        api_secret: str,
+        *,
+        cost_lookback_days: int = 365,
+    ) -> Dict[str, Any]:
         """Authoritative cash, holdings and working orders straight from Binance."""
 
         client = self._live_client(api_key, api_secret)
@@ -227,6 +233,12 @@ class DesktopService:
             open_orders_error = str(error)
 
         positions = list(account.get("positions", []))
+        # Cost basis is derived from fills; Binance has no cost-basis endpoint.
+        try:
+            basis = client.cost_basis(lookback_days=cost_lookback_days)
+        except (BinanceAPIError, ValueError):
+            basis = {}
+
         # Price the positions so the UI can show market value, not just quantity.
         prices: Dict[str, float] = {}
         quote_errors: Dict[str, str] = {}
@@ -239,12 +251,44 @@ class DesktopService:
             except (BinanceAPIError, ValueError) as error:
                 quote_errors[ticker] = str(error)
         holdings_value = 0.0
+        total_cost = 0.0
+        realised_total = 0.0
         for position in positions:
-            price = float(prices.get(str(position.get("ticker", "")), 0.0))
-            market_value = float(position.get("quantity", 0.0)) * price
+            ticker = str(position.get("ticker", ""))
+            price = float(prices.get(ticker, 0.0))
+            quantity = float(position.get("quantity", 0.0))
+            market_value = quantity * price
             position["price"] = price
             position["market_value"] = market_value
             holdings_value += market_value
+
+            book = basis.get(ticker, {})
+            average_cost = float(book.get("average_cost", 0.0))
+            covered = float(book.get("quantity", 0.0))
+            position["average_cost"] = average_cost
+            position["realised_pnl"] = float(book.get("realised_pnl", 0.0))
+            position["fees_paid"] = float(book.get("fees", 0.0))
+            position["trade_count"] = int(book.get("trade_count", 0))
+            # Fills older than the window (or transfers/mints) leave part of the
+            # holding without a known cost. Disclose it instead of implying 100%.
+            position["cost_covered_quantity"] = covered
+            position["cost_complete"] = bool(
+                average_cost > 0.0 and covered >= quantity - 1e-6
+            )
+            if average_cost > 0.0:
+                cost_value = average_cost * quantity
+                position["cost_value"] = cost_value
+                position["unrealised_pnl"] = market_value - cost_value
+                position["return_pct"] = (
+                    (price / average_cost - 1.0) * 100.0 if average_cost > 0.0 else 0.0
+                )
+                total_cost += cost_value
+            else:
+                position["cost_value"] = 0.0
+                position["unrealised_pnl"] = 0.0
+                position["return_pct"] = 0.0
+            realised_total += float(book.get("realised_pnl", 0.0))
+
         cash = float(account.get("cash", 0.0))
         equity = cash + holdings_value
         for position in positions:
@@ -266,6 +310,12 @@ class DesktopService:
             "holdings_value": holdings_value,
             "equity": equity,
             "tradable_equity": equity,
+            "total_cost": total_cost,
+            "unrealised_pnl": holdings_value - total_cost if total_cost > 0.0 else 0.0,
+            "unrealised_pnl_pct": (
+                (holdings_value / total_cost - 1.0) * 100.0 if total_cost > 0.0 else 0.0
+            ),
+            "realised_pnl": realised_total,
             "earn": earn,
             "earn_total_usdt": earn_total,
             "net_worth": equity + earn_total,

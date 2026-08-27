@@ -360,8 +360,15 @@ class BinanceStocksClient:
         symbol: Optional[str] = None,
         order_status: Optional[str] = None,
         limit: int = 100,
+        lookback_days: int = 30,
     ) -> List[Dict[str, Any]]:
-        params: Dict[str, object] = {"limit": max(1, min(int(limit), 500))}
+        # startTime/endTime are mandatory on this endpoint (-1102).
+        now_ms = int(time.time() * 1000)
+        params: Dict[str, object] = {
+            "limit": max(1, min(int(limit), 500)),
+            "startTime": now_ms - int(lookback_days) * 86_400_000,
+            "endTime": now_ms,
+        }
         if symbol:
             params["symbol"] = symbol.upper()
         if order_status:
@@ -375,12 +382,130 @@ class BinanceStocksClient:
         *,
         symbol: Optional[str] = None,
         limit: int = 100,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        lookback_days: int = 30,
     ) -> List[Dict[str, Any]]:
-        params: Dict[str, object] = {"limit": max(1, min(int(limit), 500))}
+        """Executed fills. ``startTime``/``endTime`` are mandatory (-1102).
+
+        Binance rejects the call without a window, so one is supplied by default.
+        """
+
+        now_ms = int(time.time() * 1000)
+        window_end = end_time if end_time is not None else now_ms
+        window_start = (
+            start_time if start_time is not None
+            else window_end - int(lookback_days) * 86_400_000
+        )
+        params: Dict[str, object] = {
+            "limit": max(1, min(int(limit), 500)),
+            "startTime": window_start,
+            "endTime": window_end,
+        }
         if symbol:
             params["symbol"] = symbol.upper()
         payload = self._request("GET", "/sapi/v1/equity/trade/history", params=params, signed=True)
         return _rows(payload, "trades", "data", "rows")
+
+    def all_trades(self, *, lookback_days: int = 365, page_days: int = 30) -> List[Dict[str, Any]]:
+        """Walk backwards in windows to assemble a full fill history.
+
+        Cost basis needs every fill, but each request is limited to a window, so
+        the range is paged. Duplicates are removed by executionId.
+        """
+
+        now_ms = int(time.time() * 1000)
+        page_ms = max(1, int(page_days)) * 86_400_000
+        oldest = now_ms - max(1, int(lookback_days)) * 86_400_000
+        seen: Set[str] = set()
+        trades: List[Dict[str, Any]] = []
+        window_end = now_ms
+        while window_end > oldest:
+            window_start = max(window_end - page_ms, oldest)
+            try:
+                rows = self.trade_history(
+                    limit=500, start_time=window_start, end_time=window_end
+                )
+            except (BinanceAPIError, ValueError):
+                break
+            for row in rows:
+                key = str(
+                    _first(row, "executionId", "tradeId", "id", default="")
+                ) or json.dumps(row, sort_keys=True)
+                if key in seen:
+                    continue
+                seen.add(key)
+                trades.append(row)
+            window_end = window_start
+        return trades
+
+    def cost_basis(self, *, lookback_days: int = 365) -> Dict[str, Dict[str, Any]]:
+        """Average cost per ticker, computed from fills.
+
+        Uses the moving-average method: a BUY raises total cost and quantity, a
+        SELL removes quantity at the running average so the remaining basis is
+        unchanged by disposals. Realised P&L is accumulated separately.
+
+        Binance publishes no cost-basis endpoint, so this is derived. It is
+        therefore only as complete as the fill window: positions opened before
+        ``lookback_days``, or acquired by transfer or mint rather than a trade,
+        will be short of cost and are flagged via ``covered_quantity``.
+        """
+
+        trades = self.all_trades(lookback_days=lookback_days)
+        # Oldest first so the running average is chronologically correct.
+        trades.sort(key=lambda row: _as_float(
+            _first(row, "time", "transactTime", "createTime", "updateTime")
+        ))
+
+        books: Dict[str, Dict[str, Any]] = {}
+        for row in trades:
+            ticker = str(_first(row, "symbol", "ticker", default="")).upper()
+            if not ticker:
+                continue
+            side = str(_first(row, "side", default="")).upper()
+            price = _as_float(_first(row, "price", "avgPrice", "executedPrice"))
+            quantity = _as_float(_first(row, "qty", "quantity", "executedQty"))
+            fee = _as_float(_first(row, "fee", "commission"))
+            if quantity <= 0.0 or price <= 0.0:
+                continue
+
+            book = books.setdefault(ticker, {
+                "ticker": ticker,
+                "quantity": 0.0,
+                "total_cost": 0.0,
+                "realised_pnl": 0.0,
+                "fees": 0.0,
+                "buy_quantity": 0.0,
+                "sell_quantity": 0.0,
+                "first_trade_ms": None,
+                "last_trade_ms": None,
+                "trade_count": 0,
+            })
+            stamp = _as_float(_first(row, "time", "transactTime", "createTime"))
+            if stamp > 0:
+                book["first_trade_ms"] = book["first_trade_ms"] or stamp
+                book["last_trade_ms"] = stamp
+            book["trade_count"] += 1
+            book["fees"] += fee
+
+            if side == "BUY":
+                book["total_cost"] += price * quantity + fee
+                book["quantity"] += quantity
+                book["buy_quantity"] += quantity
+            elif side == "SELL":
+                held = book["quantity"]
+                average = (book["total_cost"] / held) if held > 0.0 else price
+                closed = min(quantity, held) if held > 0.0 else 0.0
+                book["realised_pnl"] += (price - average) * closed - fee
+                book["total_cost"] -= average * closed
+                book["quantity"] = max(held - quantity, 0.0)
+                book["sell_quantity"] += quantity
+
+        for book in books.values():
+            quantity = book["quantity"]
+            book["average_cost"] = (book["total_cost"] / quantity) if quantity > 0.0 else 0.0
+        return books
 
     def wallet_balances(self) -> List[Dict[str, Any]]:
         """Per-wallet totals across Spot, Funding, Margin, Futures, Earn, etc.
