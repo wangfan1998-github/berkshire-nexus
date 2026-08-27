@@ -29,7 +29,22 @@ from .types import OrderIntent
 LIVE_ACKNOWLEDGEMENT = "I_ACKNOWLEDGE_REAL_MONEY"
 
 # Assets which represent settlement cash rather than an equity position.
-CASH_ASSETS: Set[str] = {"USDC", "USDT", "USD", "FDUSD", "BUSD"}
+CASH_ASSETS: Set[str] = {"USDC", "USDT", "USD", "FDUSD", "BUSD", "USD1"}
+
+# Wallet balances namespace equity holdings with this prefix (``EQ_AVGO``),
+# while /equity/market/exchangeInfo returns the bare ticker (``AVGO``).
+# Verified against a live account: without stripping it, every real stock
+# position fails the universe check and is silently discarded.
+EQUITY_ASSET_PREFIX = "EQ_"
+
+
+def strip_equity_prefix(asset: str) -> str:
+    """Map a wallet asset name onto its exchangeInfo ticker."""
+
+    value = asset.upper()
+    if value.startswith(EQUITY_ASSET_PREFIX):
+        return value[len(EQUITY_ASSET_PREFIX):]
+    return value
 
 # Binance rate-limits /order/place at 200 req/min per UID; back off politely.
 _RETRY_STATUS = {418, 429, 500, 502, 503, 504}
@@ -280,12 +295,37 @@ class BinanceStocksClient:
                 if asset in CASH_ASSETS:
                     cash_by_asset[asset] = cash_by_asset.get(asset, 0.0) + total
                     continue
-                if universe and asset not in universe:
-                    unclassified.append({"asset": asset, "wallet": wallet, "total": total})
+
+                # Wallet rows use EQ_<TICKER>; exchangeInfo uses <TICKER>.
+                ticker = strip_equity_prefix(asset)
+                prefixed = asset.startswith(EQUITY_ASSET_PREFIX)
+                # An EQ_ prefix is itself proof of an equity holding, so trust it
+                # even when the universe lookup is unavailable. Bare assets still
+                # need to match the universe or they are crypto, not stock.
+                is_equity = prefixed or (bool(universe) and ticker in universe)
+                if not is_equity:
+                    unclassified.append({
+                        "asset": asset,
+                        "wallet": wallet,
+                        "total": total,
+                        "reason": (
+                            "not in equity universe" if universe
+                            else "equity universe unavailable"
+                        ),
+                    })
                     continue
+
                 entry = positions.setdefault(
-                    asset,
-                    {"ticker": asset, "quantity": 0.0, "free": 0.0, "locked": 0.0, "wallets": []},
+                    ticker,
+                    {
+                        "ticker": ticker,
+                        "wallet_asset": asset,
+                        "quantity": 0.0,
+                        "free": 0.0,
+                        "locked": 0.0,
+                        "wallets": [],
+                        "tradable": ticker in universe if universe else None,
+                    },
                 )
                 entry["quantity"] += total
                 entry["free"] += free

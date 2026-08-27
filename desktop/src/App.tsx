@@ -41,6 +41,7 @@ import { LIVE_ACKNOWLEDGEMENT } from "./types";
 import type {
   AnalysisReport,
   AppSnapshot,
+  CredentialCheck,
   DesktopSettings,
   Execution,
   LiveAccount,
@@ -62,6 +63,7 @@ type BusyAction =
   | "preflight"
   | "promote"
   | "secret"
+  | "verify"
   | "live-account"
   | "reconcile"
   | "disclaimer"
@@ -1055,9 +1057,11 @@ function LivePage({
   secretConfigured,
   account,
   cycle,
+  check,
   busy,
   onSaveSecret,
   onDeleteSecret,
+  onVerify,
   onLoadAccount,
   onReconcile,
   onAcceptDisclaimer,
@@ -1069,9 +1073,11 @@ function LivePage({
   secretConfigured: boolean;
   account: LiveAccount | null;
   cycle: LiveCycleResult | null;
+  check: CredentialCheck | null;
   busy: BusyAction;
   onSaveSecret: (secret: string) => Promise<void>;
   onDeleteSecret: () => Promise<void>;
+  onVerify: () => Promise<void>;
   onLoadAccount: () => Promise<void>;
   onReconcile: () => Promise<void>;
   onAcceptDisclaimer: () => Promise<void>;
@@ -1113,6 +1119,26 @@ function LivePage({
               {secretConfigured && <button className="danger-text-button" type="button" disabled={busy !== null} onClick={() => void onDeleteSecret()}><Trash2 size={15} />删除 Secret</button>}
             </div>
           </form>
+          <div className="preflight-row">
+            <div><strong>凭证自检</strong><p>用一次未签名 + 一次签名调用定位问题：区分 Key 无效、Secret 不匹配、权限/IP 限制与本机时间偏差。</p></div>
+            <button className="secondary-button" disabled={!ready || busy !== null} onClick={() => void onVerify()}>{busy === "verify" ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />}自检</button>
+          </div>
+          {check && (
+            <div className={check.ok ? "" : "warn-note"}>
+              {!check.ok && <p style={{ margin: 0 }}>{check.guidance}</p>}
+              <table className="data-table">
+                <tbody>
+                  {check.checks.map((item) => (
+                    <tr key={item.name}>
+                      <td>{item.ok ? <StatusMark tone="good">通过</StatusMark> : <StatusMark tone="risk">失败</StatusMark>}</td>
+                      <td className="mono">{item.name}</td>
+                      <td className="muted">{item.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           <div className="preflight-row">
             <div><strong>签署美股免责声明</strong><p>Binance 要求先签署 US Equity Disclaimer，否则所有下单都会被拒绝（错误码 486410）。</p></div>
             <button className="secondary-button" disabled={!ready || busy !== null} onClick={() => void onAcceptDisclaimer()}>{busy === "disclaimer" ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}签署</button>
@@ -1273,6 +1299,7 @@ export default function App() {
   const [secretConfigured, setSecretConfigured] = useState(false);
   const [liveAccount, setLiveAccount] = useState<LiveAccount | null>(null);
   const [liveCycle, setLiveCycle] = useState<LiveCycleResult | null>(null);
+  const [credentialCheck, setCredentialCheck] = useState<CredentialCheck | null>(null);
   const [busy, setBusy] = useState<BusyAction>("boot");
   const [toast, setToast] = useState<Toast | null>(null);
   const [modeExplanation, setModeExplanation] = useState(false);
@@ -1524,6 +1551,19 @@ export default function App() {
     }
   };
 
+  const verifyCredentials = async () => {
+    setBusy("verify");
+    try {
+      const value = await desktopBridge.verifyCredentials();
+      setCredentialCheck(value);
+      notify(value.ok ? "success" : "error", value.guidance);
+    } catch (error) {
+      notify("error", `凭证自检失败：${asError(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const loadLiveAccount = async () => {
     setBusy("live-account");
     try {
@@ -1608,7 +1648,7 @@ export default function App() {
       case "research": return <Research settings={settings} reports={reports} selectedTicker={selectedTicker} busy={busy === "research"} onAnalyze={analyze} onSelect={setSelectedTicker} />;
       case "ai": return <AISettingsPage settings={settings} configured={aiKeyConfigured} busy={busy} onSettings={setSettings} onSaveSettings={() => saveSettings("AI 与数据源配置已保存")} onSaveKey={saveAIKey} onDeleteKey={deleteAIKey} onTest={testAI} />;
       case "portfolio": return <Portfolio snapshot={snapshot} />;
-      case "live": return <LivePage settings={settings} keyConfigured={keyConfigured} secretConfigured={secretConfigured} account={liveAccount} cycle={liveCycle} busy={busy} onSaveSecret={saveSecret} onDeleteSecret={deleteSecret} onLoadAccount={loadLiveAccount} onReconcile={reconcileLive} onAcceptDisclaimer={acceptDisclaimer} onCancelAll={cancelAllLive} onRunCycle={runLiveCycle} />;
+      case "live": return <LivePage settings={settings} keyConfigured={keyConfigured} secretConfigured={secretConfigured} account={liveAccount} cycle={liveCycle} check={credentialCheck} busy={busy} onSaveSecret={saveSecret} onDeleteSecret={deleteSecret} onVerify={verifyCredentials} onLoadAccount={loadLiveAccount} onReconcile={reconcileLive} onAcceptDisclaimer={acceptDisclaimer} onCancelAll={cancelAllLive} onRunCycle={runLiveCycle} />;
       case "agent": return <AgentPage snapshot={snapshot} settings={settings} running={agentRunning} busy={busy === "agent" || busy === "cycle"} onSettings={setSettings} onStart={startAgent} onStop={stopAgent} onCycle={runCycle} />;
       case "models": return <Models snapshot={snapshot} busy={busy === "promote"} onPromote={promote} />;
       case "risk": return <RiskPage settings={settings} onSettings={setSettings} onSave={() => saveSettings("风控设置已保存")} busy={busy === "save"} />;

@@ -267,6 +267,112 @@ class DesktopService:
             "quote_errors": quote_errors,
         })
 
+    def verify_credentials(self, api_key: str, api_secret: str) -> Dict[str, Any]:
+        """Diagnose a credential pair against Binance and name the actual cause.
+
+        Runs an unsigned call first, then a signed one, so the two failure modes
+        are distinguishable: an unsigned failure means the *key* is wrong or the
+        account lacks Stocks access, while an unsigned success plus a signed
+        failure isolates the problem to the *secret* or its permissions.
+        """
+
+        if not api_key:
+            raise ValueError("Binance API Key is not configured")
+        if not api_secret:
+            raise ValueError("Binance API Secret is not configured")
+
+        checks: List[Dict[str, Any]] = []
+        identical = api_key.strip() == api_secret.strip()
+        checks.append({
+            "name": "credentials_differ",
+            "ok": not identical,
+            "detail": (
+                "API Key and Secret are the same value — the Secret is only shown "
+                "once, at key creation time"
+                if identical else "Key and Secret are different values"
+            ),
+        })
+
+        client = BinanceStocksClient(api_key=api_key, api_secret=api_secret)
+
+        # 1) Unsigned, API-key-only. Proves the key is recognised.
+        unsigned_ok = False
+        try:
+            client.exchange_info("AAPL")
+            unsigned_ok = True
+            unsigned_detail = "API Key accepted for market data"
+        except BinanceAPIError as error:
+            unsigned_detail = f"{error.code}: {error.message}"
+        except ValueError as error:
+            unsigned_detail = str(error)
+        checks.append({
+            "name": "api_key_recognised",
+            "ok": unsigned_ok,
+            "detail": unsigned_detail,
+        })
+
+        # 2) Signed. Isolates secret / permission problems.
+        signed_ok = False
+        signed_code: Any = None
+        try:
+            client.funding_assets("USDC")
+            signed_ok = True
+            signed_detail = "Signed request accepted — credentials are usable"
+        except BinanceAPIError as error:
+            signed_code = error.code
+            signed_detail = f"{error.code}: {error.message}"
+        except ValueError as error:
+            signed_detail = str(error)
+        checks.append({
+            "name": "signature_accepted",
+            "ok": signed_ok,
+            "detail": signed_detail,
+        })
+
+        # Map Binance's terse codes onto the action the operator should take.
+        if signed_ok:
+            diagnosis = "credentials_ok"
+            guidance = "凭证可用，可以读取真实账户。"
+        elif identical:
+            diagnosis = "key_pasted_as_secret"
+            guidance = (
+                "Secret 与 API Key 相同。Binance 只在创建密钥的那一刻显示 Secret，"
+                "之后无法再查看。请新建一对密钥，并在创建页面复制 Secret。"
+            )
+        elif signed_code == -1022:
+            diagnosis = "invalid_signature"
+            guidance = (
+                "签名被拒。常见原因：Secret 不是这把 Key 对应的那个（比如删除重建后"
+                "只更新了一边）；或创建时选了 Ed25519/RSA —— 那种密钥给的是 PEM 私钥，"
+                "本版只支持 HMAC-SHA256，请改用 System generated 密钥。"
+            )
+        elif signed_code == -2015:
+            diagnosis = "permission_or_ip"
+            guidance = (
+                "Key 有效但被拒绝。请检查是否勾选了 Enable Reading 权限，"
+                "以及 IP 白名单是否包含你当前的出口 IP。"
+            )
+        elif signed_code == -1021:
+            diagnosis = "clock_skew"
+            guidance = "本机时间与交易所偏差过大，请开启系统自动校时后重试。"
+        elif not unsigned_ok:
+            diagnosis = "key_rejected"
+            guidance = (
+                "API Key 未被接受。请确认 Key 复制完整、未过期，"
+                "且账户已开通 Binance Stocks。"
+            )
+        else:
+            diagnosis = "signed_call_failed"
+            guidance = "签名调用失败，详见下方原始错误。"
+
+        return json_safe({
+            "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+            "ok": signed_ok,
+            "diagnosis": diagnosis,
+            "guidance": guidance,
+            "checks": checks,
+        })
+
     def live_reconcile(self, api_key: str, api_secret: str) -> Dict[str, Any]:
         """Resolve every locally tracked order against the exchange."""
 

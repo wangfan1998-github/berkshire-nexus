@@ -46,6 +46,63 @@ class FakeClient(BinanceStocksClient):
 
 
 class AccountSnapshotTests(unittest.TestCase):
+    def test_eq_prefixed_wallet_assets_are_recognised_as_positions(self):
+        """Wallet rows are EQ_<TICKER>; exchangeInfo returns the bare ticker.
+
+        Regression: intersecting the raw wallet asset name against the universe
+        discarded every real stock holding and reported a near-empty portfolio.
+        """
+
+        client = FakeClient({
+            "/sapi/v1/equity/market/exchangeInfo": {
+                "symbols": [{"symbol": "AVGO"}, {"symbol": "GOOGL"}, {"symbol": "QQQM"}]
+            },
+            "/sapi/v1/asset/get-funding-asset": [
+                {"asset": "EQ_AVGO", "free": "0.93578113", "locked": "0"},
+                {"asset": "EQ_GOOGL", "free": "1.18", "locked": "0"},
+                {"asset": "EQ_QQQM", "free": "4.77290262", "locked": "0"},
+                {"asset": "USDC", "free": "0.027396", "locked": "0"},
+            ],
+            "/sapi/v3/asset/getUserAsset": [],
+        })
+        snapshot = client.account_snapshot()
+
+        self.assertEqual(
+            [item["ticker"] for item in snapshot["positions"]], ["AVGO", "GOOGL", "QQQM"]
+        )
+        self.assertEqual(snapshot["unclassified_assets"], [])
+        self.assertAlmostEqual(snapshot["positions"][0]["quantity"], 0.93578113)
+        # The original wallet asset name is retained for traceability.
+        self.assertEqual(snapshot["positions"][0]["wallet_asset"], "EQ_AVGO")
+
+    def test_eq_prefix_is_trusted_when_universe_lookup_fails(self):
+        """An EQ_ prefix alone proves an equity holding."""
+
+        client = FakeClient({
+            "/sapi/v1/equity/market/exchangeInfo": BinanceAPIError(-1121, "down", 400),
+            "/sapi/v1/asset/get-funding-asset": [
+                {"asset": "EQ_TSM", "free": "0.95795238", "locked": "0"},
+            ],
+            "/sapi/v3/asset/getUserAsset": [],
+        })
+        snapshot = client.account_snapshot()
+        self.assertEqual([item["ticker"] for item in snapshot["positions"]], ["TSM"])
+
+    def test_crypto_without_prefix_is_not_a_position(self):
+        client = FakeClient({
+            "/sapi/v1/equity/market/exchangeInfo": {"symbols": [{"symbol": "AAPL"}]},
+            "/sapi/v1/asset/get-funding-asset": [
+                {"asset": "BTC", "free": "0.5", "locked": "0"},
+                {"asset": "USD1", "free": "0.00002918", "locked": "0"},
+            ],
+            "/sapi/v3/asset/getUserAsset": [],
+        })
+        snapshot = client.account_snapshot()
+        self.assertEqual(snapshot["positions"], [])
+        self.assertEqual([item["asset"] for item in snapshot["unclassified_assets"]], ["BTC"])
+        # USD1 is settlement cash, not an unclassified asset.
+        self.assertIn("USD1", snapshot["cash_by_asset"])
+
     def test_positions_come_from_wallets_intersected_with_universe(self):
         client = FakeClient({
             "/sapi/v1/equity/market/exchangeInfo": {

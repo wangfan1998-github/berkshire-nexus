@@ -4,6 +4,7 @@ import type {
   AgentRuntimeStatus,
   AnalysisReport,
   AppSnapshot,
+  CredentialCheck,
   DesktopSettings,
   LiveAccount,
   LiveCycleResult,
@@ -155,6 +156,12 @@ export const desktopBridge = {
   async deleteSecret(): Promise<void> {
     if (isTauri) await invoke("delete_binance_secret");
     else await wait();
+  },
+
+  async verifyCredentials(): Promise<CredentialCheck> {
+    if (isTauri) return invoke<CredentialCheck>("verify_binance_credentials");
+    await wait(600);
+    throw new Error("浏览器预览无法访问系统钥匙串；请在 Tauri 桌面 App 中自检。");
   },
 
   async liveAccount(): Promise<LiveAccount> {

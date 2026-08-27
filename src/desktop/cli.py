@@ -45,6 +45,7 @@ def main() -> None:
     subparsers.add_parser("live-account")
     subparsers.add_parser("live-reconcile")
     subparsers.add_parser("live-accept-disclaimer")
+    subparsers.add_parser("verify-credentials")
 
     cancel_all = subparsers.add_parser("live-cancel-all")
     cancel_all.add_argument("--symbol", default="")
@@ -89,6 +90,8 @@ def main() -> None:
             )
         elif args.command == "live-account":
             value = service.live_account(binance_key, binance_secret)
+        elif args.command == "verify-credentials":
+            value = service.verify_credentials(binance_key, binance_secret)
         elif args.command == "live-reconcile":
             value = service.live_reconcile(binance_key, binance_secret)
         elif args.command == "live-accept-disclaimer":

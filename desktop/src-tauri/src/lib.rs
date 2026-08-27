@@ -325,10 +325,47 @@ fn save_binance_secret(api_secret: String) -> Result<Value, String> {
     if normalized.len() < 16 {
         return Err("The Binance API Secret appears incomplete".to_string());
     }
+    // The Secret is only displayed once, at key-creation time. Revisiting the
+    // API management page shows the Key but not the Secret, so pasting the Key
+    // into this field is an easy mistake that surfaces later as an opaque
+    // -1022 signature error. Reject it up front.
+    if let Some(existing_key) = optional_key(BINANCE_KEYRING_ACCOUNT)? {
+        if existing_key.trim() == normalized {
+            return Err(
+                "This value is identical to your API Key, so it cannot be the Secret. \
+                 Binance shows the Secret only once, when the key is created — if it \
+                 was not saved then, create a new API key pair and copy the Secret \
+                 from the creation screen."
+                    .to_string(),
+            );
+        }
+    }
     keyring_entry(BINANCE_SECRET_KEYRING_ACCOUNT)?
         .set_password(normalized)
         .map_err(|error| format!("Could not save the Binance API Secret: {error}"))?;
     Ok(json!({"configured": true}))
+}
+
+/// Signed round-trip against Binance to prove the credential pair works.
+/// Reports the failure cause in plain language instead of a bare error code.
+#[tauri::command]
+fn verify_binance_credentials(app: AppHandle) -> Result<Value, String> {
+    let (key, secret) = binance_credentials()?;
+    if key.trim() == secret.trim() {
+        return Err(
+            "API Key and Secret are the same value. The Secret is shown only at \
+             key-creation time; create a new key pair and copy it from that screen."
+                .to_string(),
+        );
+    }
+    run_json_command_full(
+        &app,
+        &["verify-credentials".to_string()],
+        Some(&key),
+        Some(&secret),
+        None,
+        false,
+    )
 }
 
 #[tauri::command]
@@ -655,6 +692,7 @@ pub fn run() {
             save_binance_secret,
             delete_binance_secret,
             binance_secret_status,
+            verify_binance_credentials,
             live_account,
             live_reconcile,
             live_accept_disclaimer,

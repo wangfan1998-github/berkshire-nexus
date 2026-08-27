@@ -252,13 +252,23 @@ export const LIVE_ACKNOWLEDGEMENT = "I_ACKNOWLEDGE_REAL_MONEY";
 
 export interface LivePosition {
   ticker: string;
+  wallet_asset?: string;
   quantity: number;
   free: number;
   locked: number;
   wallets: string[];
+  tradable?: boolean | null;
   price: number;
   market_value: number;
   weight_pct: number;
+}
+
+export interface CredentialCheck {
+  checked_at_utc: string;
+  ok: boolean;
+  diagnosis: string;
+  guidance: string;
+  checks: Array<{ name: string; ok: boolean; detail: string }>;
 }
 
 export interface LiveOrder {
