@@ -1152,24 +1152,24 @@ function LivePage({
           ) : (
             <>
               <div className="metric-row">
-                <div><span>可交易权益<br/><small className="muted">风控分母</small></span><strong>{money.format(account.equity)}</strong></div>
-                <div><span>现金</span><strong>{money.format(account.cash)}</strong></div>
                 <div><span>股票市值</span><strong>{money.format(account.holdings_value)}</strong></div>
-                <div><span>理财 Earn<br/><small className="muted">不参与风控</small></span><strong>{money.format(account.earn_total_usdt ?? 0)}</strong></div>
+                <div><span>理财 Earn</span><strong>{money.format(account.earn_total_usdt ?? 0)}</strong></div>
                 <div><span>净资产</span><strong>{money.format(account.net_worth ?? account.equity)}</strong></div>
               </div>
               {(account.earn?.flexible?.length || account.earn?.locked?.length) ? (
                 <details className="earn-details">
                   <summary>理财明细（{(account.earn.flexible?.length ?? 0) + (account.earn.locked?.length ?? 0)} 项，已订阅产品不可直接卖出，因此不计入风控权益）</summary>
                   <table className="data-table">
-                    <thead><tr><th>类型</th><th>资产</th><th>数量</th><th>备注</th></tr></thead>
+                    <thead><tr><th>类型</th><th>资产</th><th>数量</th><th>年化</th><th>实际年化</th><th>累计收益</th></tr></thead>
                     <tbody>
                       {(account.earn.flexible ?? []).map((row) => (
                         <tr key={`f-${row.asset}`}>
                           <td>活期</td>
                           <td className="mono">{row.asset}</td>
                           <td>{row.amount.toFixed(6)}</td>
-                          <td className="muted">{row.apr > 0 ? `年化 ${(row.apr * 100).toFixed(2)}%` : "—"}{row.can_redeem ? "" : " · 不可赎回"}</td>
+                          <td>{row.apr > 0 ? `${(row.apr * 100).toFixed(2)}%` : "—"}</td>
+                          <td className="muted">{row.realised_apr > 0 ? `${(row.realised_apr * 100).toFixed(2)}%` : "—"}</td>
+                          <td className="muted">{row.cumulative_rewards > 0 ? row.cumulative_rewards.toFixed(6) : "—"}{row.can_redeem ? "" : " · 不可赎回"}</td>
                         </tr>
                       ))}
                       {(account.earn.locked ?? []).map((row) => (
@@ -1177,11 +1177,12 @@ function LivePage({
                           <td>定期</td>
                           <td className="mono">{row.asset}</td>
                           <td>{row.amount.toFixed(6)}</td>
-                          <td className="muted">{row.duration_days} 天 · 已计息 {row.accrual_days} 天</td>
+                          <td colSpan={3} className="muted">{row.duration_days} 天 · 已计息 {row.accrual_days} 天</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                  <p className="muted-note">「年化」是平台展示的档位/活动利率（如 0-200 USDC 5%）；「实际年化」是全额余额的实际结算利率，超出优惠档位后会低于前者。</p>
                 </details>
               ) : null}
               {account.positions.length === 0 ? (

@@ -293,8 +293,15 @@ export interface LiveOrder {
 export interface EarnPosition {
   asset: string;
   amount: number;
+  /** Platform headline (tiered/promotional) rate. */
   apr: number;
+  /** Blended rate actually realised on the whole balance. */
+  realised_apr: number;
+  apr_tiers: Record<string, number>;
+  cumulative_rewards: number;
+  yesterday_rewards: number;
   can_redeem: boolean;
+  product_id: string;
 }
 
 export interface EarnLockedPosition {

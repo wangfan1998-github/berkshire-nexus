@@ -77,11 +77,23 @@ class AssetClassificationTests(unittest.TestCase):
         self.assertEqual(resolved["ticker"], "GOOGL")
         self.assertEqual(resolved["resolved_by"], "eq-prefix")
 
-    def test_bare_ticker_needs_the_universe(self):
-        self.assertIsNone(classify_wallet_asset("U", {}, set()))
-        self.assertEqual(
-            classify_wallet_asset("U", {}, self.UNIVERSE)["resolved_by"], "universe-match"
-        )
+    def test_bare_ticker_is_never_accepted_on_a_universe_match_alone(self):
+        """Regression: crypto token U (~$1) collides with Unity stock (~$44).
+
+        The equity universe lists ~7,900 symbols, so short crypto tickers
+        collide with real ones. A universe match alone mispriced a crypto
+        balance 44x, so it is no longer sufficient evidence.
+        """
+
+        self.assertIsNone(classify_wallet_asset("U", {}, self.UNIVERSE))
+        self.assertIsNone(classify_wallet_asset("U", {}, self.UNIVERSE, {"stockTicker": None}))
+
+    def test_wallet_stock_ticker_is_the_strongest_evidence(self):
+        """Equity rows carry stockTicker; crypto rows return null."""
+
+        resolved = classify_wallet_asset("EQ_AVGO", {}, set(), {"stockTicker": "AVGO"})
+        self.assertEqual(resolved["ticker"], "AVGO")
+        self.assertEqual(resolved["resolved_by"], "wallet-stockTicker")
 
     def test_crypto_is_never_classified_as_equity(self):
         for asset in ("BTC", "ETH", "SENT", "SOL"):
@@ -240,12 +252,12 @@ class AccountSnapshotTests(unittest.TestCase):
             },
             "/sapi/v1/asset/get-funding-asset": [
                 {"asset": "USDC", "free": "1500.5", "locked": "0"},
-                {"asset": "AAPL", "free": "3", "locked": "1"},
-                # Not in the equity universe -> must not become a position.
+                {"asset": "EQ_AAPL", "stockTicker": "AAPL", "free": "3", "locked": "1"},
+                # No stockTicker and no EQ_ prefix -> not an equity position.
                 {"asset": "BTC", "free": "0.5", "locked": "0"},
             ],
             "/sapi/v3/asset/getUserAsset": [
-                {"asset": "MSFT", "free": "2", "locked": "0"},
+                {"asset": "EQ_MSFT", "stockTicker": "MSFT", "free": "2", "locked": "0"},
             ],
         })
         snapshot = client.account_snapshot()
@@ -432,7 +444,7 @@ class LiveBrokerTests(unittest.TestCase):
                 "/sapi/v1/equity/market/exchangeInfo": {"symbols": [{"symbol": "AAPL"}]},
                 "/sapi/v1/asset/get-funding-asset": [
                     {"asset": "USDC", "free": "2000", "locked": "0"},
-                    {"asset": "AAPL", "free": "5", "locked": "0"},
+                    {"asset": "EQ_AAPL", "stockTicker": "AAPL", "free": "5", "locked": "0"},
                 ],
                 "/sapi/v3/asset/getUserAsset": [],
             })

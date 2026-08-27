@@ -55,17 +55,20 @@ def classify_wallet_asset(
 ) -> Optional[Dict[str, Any]]:
     """Resolve a wallet asset to an equity ticker, or None if it is not equity.
 
-    Precedence is deliberate, strongest evidence first:
+    Only positive evidence from Binance counts:
 
-    0. ``stockTicker`` on the wallet row — Binance states the underlying itself.
-    1. ``/equity/market/tokenized-assets`` — Binance's own mapping. It also
-       carries the multiplier needed to convert a token balance into shares.
-    2. ``EQ_`` prefix — the direct-equity naming convention. Trusted on its own
-       so holdings survive an exchangeInfo/tokenized-map outage.
-    3. Bare ticker present in the tradable universe.
+    1. ``stockTicker`` on the wallet row. Equity rows carry it (``EQ_AVGO`` ->
+       ``AVGO``); crypto rows return ``stockTicker: null``.
+    2. ``EQ_`` prefix — the direct-equity naming convention, trusted alone so
+       holdings survive an API outage.
+    3. ``/equity/market/tokenized-assets`` mapping, which also supplies the
+       multiplier converting a token balance into shares.
 
-    Anything else is treated as non-equity (crypto, staked tokens, unknown
-    products) and surfaced as unclassified rather than guessed at.
+    A bare ticker matching the equity universe is deliberately NOT accepted.
+    Binance lists ~7,900 equity symbols, and single-letter/short crypto tokens
+    collide with them: the token ``U`` (~$1) collides with Unity (~$44), so a
+    universe match mispriced a crypto balance 44x. Ambiguous assets are reported
+    as unclassified instead.
     """
 
     value = asset.upper()
@@ -73,7 +76,6 @@ def classify_wallet_asset(
     universe = universe or set()
 
     # Strongest evidence: the wallet row itself names the underlying ticker.
-    # /asset/get-funding-asset returns e.g. {"asset":"EQ_AVGO","stockTicker":"AVGO"}.
     declared = str((row or {}).get("stockTicker") or "").upper() if row else ""
     if declared:
         return {
@@ -82,16 +84,6 @@ def classify_wallet_asset(
             "multiplier_valid": True,
             "tokenized": False,
             "resolved_by": "wallet-stockTicker",
-        }
-
-    mapped = resolution.get(value)
-    if mapped:
-        return {
-            "ticker": mapped["ticker"],
-            "multiplier": mapped.get("multiplier", 1.0),
-            "multiplier_valid": mapped.get("multiplier_valid", True),
-            "tokenized": True,
-            "resolved_by": "tokenized-assets",
         }
 
     if value.startswith(EQUITY_ASSET_PREFIX):
@@ -103,13 +95,14 @@ def classify_wallet_asset(
             "resolved_by": "eq-prefix",
         }
 
-    if value in universe:
+    mapped = resolution.get(value)
+    if mapped:
         return {
-            "ticker": value,
-            "multiplier": 1.0,
-            "multiplier_valid": True,
-            "tokenized": False,
-            "resolved_by": "universe-match",
+            "ticker": mapped["ticker"],
+            "multiplier": mapped.get("multiplier", 1.0),
+            "multiplier_valid": mapped.get("multiplier_valid", True),
+            "tokenized": True,
+            "resolved_by": "tokenized-assets",
         }
 
     return None
@@ -167,6 +160,42 @@ def _rows(payload: Any, *keys: str) -> List[Dict[str, Any]]:
             if isinstance(value, list) and all(isinstance(row, dict) for row in value):
                 return list(value)
     return []
+
+
+def _earn_flexible_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalise a Simple Earn flexible position.
+
+    Binance returns two different rates and they are not interchangeable:
+
+    * ``tierAnnualPercentageRate`` — the tiered/promotional rate, keyed by
+      balance band (``{"0-200USDC": "0.05"}``). This is what the Binance app
+      advertises for the product.
+    * ``latestAnnualPercentageRate`` — the realised rate on the *whole* balance,
+      which is lower once a holding exceeds the bonus tier.
+
+    Both are reported: ``apr`` follows the platform's headline figure so the
+    numbers reconcile with what the user sees, while ``realised_apr`` keeps the
+    blended rate actually being earned.
+    """
+
+    tiers_raw = row.get("tierAnnualPercentageRate")
+    tiers: Dict[str, float] = {}
+    if isinstance(tiers_raw, dict):
+        tiers = {str(k): _as_float(v) for k, v in tiers_raw.items()}
+    realised = _as_float(_first(row, "latestAnnualPercentageRate"))
+    # Highest tier is the advertised headline rate for the product.
+    headline = max(tiers.values()) if tiers else realised
+    return {
+        "asset": str(_first(row, "asset", default="")).upper(),
+        "amount": _as_float(_first(row, "totalAmount", "amount")),
+        "apr": headline,
+        "realised_apr": realised,
+        "apr_tiers": tiers,
+        "cumulative_rewards": _as_float(_first(row, "cumulativeTotalRewards")),
+        "yesterday_rewards": _as_float(_first(row, "yesterdayRealTimeRewards")),
+        "can_redeem": bool(_first(row, "canRedeem", default=True)),
+        "product_id": str(_first(row, "productId", default="")),
+    }
 
 
 class BinanceStocksClient:
@@ -406,13 +435,7 @@ class BinanceStocksClient:
             result["errors"]["account"] = str(error)
         try:
             result["flexible"] = [
-                {
-                    "asset": str(_first(row, "asset", default="")).upper(),
-                    "amount": _as_float(_first(row, "totalAmount", "amount")),
-                    "apr": _as_float(_first(row, "latestAnnualPercentageRate")),
-                    "can_redeem": bool(_first(row, "canRedeem", default=True)),
-                }
-                for row in self.earn_flexible_positions()
+                _earn_flexible_row(row) for row in self.earn_flexible_positions()
             ]
         except (BinanceAPIError, ValueError) as error:
             result["errors"]["flexible"] = str(error)
