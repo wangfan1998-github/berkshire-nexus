@@ -42,8 +42,26 @@ def main() -> None:
     preflight = subparsers.add_parser("binance-preflight")
     preflight.add_argument("tickers", nargs="+")
 
+    subparsers.add_parser("live-account")
+    subparsers.add_parser("live-reconcile")
+    subparsers.add_parser("live-accept-disclaimer")
+
+    cancel_all = subparsers.add_parser("live-cancel-all")
+    cancel_all.add_argument("--symbol", default="")
+
+    live_cycle = subparsers.add_parser("live-cycle")
+    live_cycle.add_argument("tickers", nargs="+")
+    live_cycle.add_argument("--risk-config-json", default="{}")
+    live_cycle.add_argument("--research-config-json", default="{}")
+    # Submission requires the explicit acknowledgement AND --submit. Preview is
+    # the default so a mistaken invocation can never reach the market.
+    live_cycle.add_argument("--confirmation", default="")
+    live_cycle.add_argument("--submit", action="store_true")
+
     args = parser.parse_args()
     service = DesktopService(args.state_dir)
+    binance_key = os.environ.get("BINANCE_API_KEY", "")
+    binance_secret = os.environ.get("BINANCE_API_SECRET", "")
     try:
         if args.command == "snapshot":
             value = service.snapshot()
@@ -66,8 +84,31 @@ def main() -> None:
             value = service.promote_model()
         elif args.command == "binance-preflight":
             value = service.binance_preflight(
-                os.environ.get("BINANCE_API_KEY", ""),
+                binance_key,
                 args.tickers,
+            )
+        elif args.command == "live-account":
+            value = service.live_account(binance_key, binance_secret)
+        elif args.command == "live-reconcile":
+            value = service.live_reconcile(binance_key, binance_secret)
+        elif args.command == "live-accept-disclaimer":
+            value = service.live_accept_disclaimer(binance_key, binance_secret)
+        elif args.command == "live-cancel-all":
+            value = service.live_cancel_all(
+                binance_key,
+                binance_secret,
+                args.symbol or None,
+            )
+        elif args.command == "live-cycle":
+            value = service.run_live_cycle(
+                args.tickers,
+                api_key=binance_key,
+                api_secret=binance_secret,
+                research_config=json.loads(args.research_config_json),
+                ai_api_key=os.environ.get("BERKSHIRE_NEXUS_AI_API_KEY", ""),
+                risk_config=json.loads(args.risk_config_json),
+                confirmation=args.confirmation,
+                dry_run=not args.submit,
             )
         elif args.command == "test-ai":
             value = service.test_ai_provider(

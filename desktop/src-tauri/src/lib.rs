@@ -10,7 +10,11 @@ use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 
 const KEYRING_SERVICE: &str = "com.berkshire.nexus";
 const BINANCE_KEYRING_ACCOUNT: &str = "binance-api-key";
+const BINANCE_SECRET_KEYRING_ACCOUNT: &str = "binance-api-secret";
 const AI_KEYRING_ACCOUNT: &str = "ai-provider-api-key";
+// Mirrors LIVE_ACKNOWLEDGEMENT in src/trading/binance_stocks.py. The UI must
+// send this verbatim before any real order is submitted.
+const LIVE_ACKNOWLEDGEMENT: &str = "I_ACKNOWLEDGE_REAL_MONEY";
 
 #[derive(Default)]
 struct AgentProcess(Mutex<Option<Child>>);
@@ -93,13 +97,35 @@ fn run_json_command(
     binance_api_key: Option<&str>,
     ai_api_key: Option<&str>,
 ) -> Result<Value, String> {
+    run_json_command_full(app, arguments, binance_api_key, None, ai_api_key, false)
+}
+
+/// Full variant which can also pass the Binance secret and the live-trading
+/// acknowledgement. Credentials travel as environment variables of the child
+/// process so they never appear in argv (visible to any local `ps`).
+fn run_json_command_full(
+    app: &AppHandle,
+    arguments: &[String],
+    binance_api_key: Option<&str>,
+    binance_api_secret: Option<&str>,
+    ai_api_key: Option<&str>,
+    acknowledge_live: bool,
+) -> Result<Value, String> {
     let (mut command, _) = command_base(app)?;
     command.args(arguments);
     if let Some(value) = binance_api_key {
         command.env("BINANCE_API_KEY", value);
     }
+    if let Some(value) = binance_api_secret {
+        command.env("BINANCE_API_SECRET", value);
+    }
     if let Some(value) = ai_api_key {
         command.env("BERKSHIRE_NEXUS_AI_API_KEY", value);
+    }
+    if acknowledge_live {
+        // Second of the two independent live gates; the first is the explicit
+        // confirmation string checked in Python.
+        command.env("BERKSHIRE_NEXUS_LIVE_TRADING", LIVE_ACKNOWLEDGEMENT);
     }
     let output = command
         .output()
@@ -291,6 +317,143 @@ fn delete_ai_key() -> Result<Value, String> {
 #[tauri::command]
 fn ai_key_status() -> Result<Value, String> {
     Ok(json!({"configured": optional_key(AI_KEYRING_ACCOUNT)?.is_some()}))
+}
+
+#[tauri::command]
+fn save_binance_secret(api_secret: String) -> Result<Value, String> {
+    let normalized = api_secret.trim();
+    if normalized.len() < 16 {
+        return Err("The Binance API Secret appears incomplete".to_string());
+    }
+    keyring_entry(BINANCE_SECRET_KEYRING_ACCOUNT)?
+        .set_password(normalized)
+        .map_err(|error| format!("Could not save the Binance API Secret: {error}"))?;
+    Ok(json!({"configured": true}))
+}
+
+#[tauri::command]
+fn delete_binance_secret() -> Result<Value, String> {
+    match keyring_entry(BINANCE_SECRET_KEYRING_ACCOUNT)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(json!({"configured": false})),
+        Err(error) => Err(format!("Could not remove the Binance API Secret: {error}")),
+    }
+}
+
+#[tauri::command]
+fn binance_secret_status() -> Result<Value, String> {
+    Ok(json!({
+        "configured": optional_key(BINANCE_SECRET_KEYRING_ACCOUNT)?.is_some()
+    }))
+}
+
+/// Read both Binance credentials, failing with actionable guidance when either
+/// is absent. Signed endpoints are unusable without the secret.
+fn binance_credentials() -> Result<(String, String), String> {
+    let key = optional_key(BINANCE_KEYRING_ACCOUNT)?
+        .ok_or_else(|| "Configure a Binance API Key first".to_string())?;
+    let secret = optional_key(BINANCE_SECRET_KEYRING_ACCOUNT)?.ok_or_else(|| {
+        "Configure a Binance API Secret first — signed account and order endpoints require it"
+            .to_string()
+    })?;
+    Ok((key, secret))
+}
+
+#[tauri::command]
+fn live_account(app: AppHandle) -> Result<Value, String> {
+    let (key, secret) = binance_credentials()?;
+    run_json_command_full(
+        &app,
+        &["live-account".to_string()],
+        Some(&key),
+        Some(&secret),
+        None,
+        false,
+    )
+}
+
+#[tauri::command]
+fn live_reconcile(app: AppHandle) -> Result<Value, String> {
+    let (key, secret) = binance_credentials()?;
+    run_json_command_full(
+        &app,
+        &["live-reconcile".to_string()],
+        Some(&key),
+        Some(&secret),
+        None,
+        false,
+    )
+}
+
+#[tauri::command]
+fn live_accept_disclaimer(app: AppHandle) -> Result<Value, String> {
+    let (key, secret) = binance_credentials()?;
+    run_json_command_full(
+        &app,
+        &["live-accept-disclaimer".to_string()],
+        Some(&key),
+        Some(&secret),
+        None,
+        false,
+    )
+}
+
+#[tauri::command]
+fn live_cancel_all(app: AppHandle, symbol: Option<String>) -> Result<Value, String> {
+    let (key, secret) = binance_credentials()?;
+    let mut arguments = vec!["live-cancel-all".to_string()];
+    if let Some(value) = symbol.filter(|item| !item.trim().is_empty()) {
+        arguments.push("--symbol".to_string());
+        arguments.push(value);
+    }
+    // Cancelling reduces exposure, so it only needs the environment gate.
+    run_json_command_full(&app, &arguments, Some(&key), Some(&secret), None, true)
+}
+
+/// Preview or submit a live cycle.
+///
+/// `submit` alone is not enough: `confirmation` must equal the acknowledgement
+/// string, and only then is the environment gate set for the child process.
+#[tauri::command]
+fn run_live_cycle(
+    app: AppHandle,
+    tickers: Vec<String>,
+    risk_config: Value,
+    research_config: Value,
+    confirmation: String,
+    submit: bool,
+) -> Result<Value, String> {
+    if tickers.is_empty() {
+        return Err("Add at least one ticker before running a live cycle".to_string());
+    }
+    let acknowledged = confirmation.trim() == LIVE_ACKNOWLEDGEMENT;
+    if submit && !acknowledged {
+        return Err(format!(
+            "Live submission requires the confirmation phrase {LIVE_ACKNOWLEDGEMENT}"
+        ));
+    }
+    let (key, secret) = binance_credentials()?;
+    let mut arguments = vec!["live-cycle".to_string()];
+    arguments.extend(tickers);
+    arguments.push("--risk-config-json".to_string());
+    arguments.push(serde_json::to_string(&risk_config).map_err(|error| error.to_string())?);
+    arguments.push("--research-config-json".to_string());
+    arguments.push(serde_json::to_string(&research_config).map_err(|error| error.to_string())?);
+    if acknowledged {
+        arguments.push("--confirmation".to_string());
+        arguments.push(confirmation.trim().to_string());
+    }
+    if submit && acknowledged {
+        arguments.push("--submit".to_string());
+    }
+    let ai_key = ai_key_for_config(&research_config, false)?;
+    run_json_command_full(
+        &app,
+        &arguments,
+        Some(&key),
+        Some(&secret),
+        ai_key.as_deref(),
+        submit && acknowledged,
+    )
 }
 
 #[tauri::command]
@@ -489,6 +652,14 @@ pub fn run() {
             delete_ai_key,
             ai_key_status,
             test_ai_provider,
+            save_binance_secret,
+            delete_binance_secret,
+            binance_secret_status,
+            live_account,
+            live_reconcile,
+            live_accept_disclaimer,
+            live_cancel_all,
+            run_live_cycle,
             start_agent,
             stop_agent,
             agent_runtime_status,

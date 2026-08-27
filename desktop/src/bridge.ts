@@ -5,6 +5,9 @@ import type {
   AnalysisReport,
   AppSnapshot,
   DesktopSettings,
+  LiveAccount,
+  LiveCycleResult,
+  LiveReconciliation,
 } from "./types";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -134,6 +137,69 @@ export const desktopBridge = {
       return value.configured;
     }
     return false;
+  },
+
+  async secretStatus(): Promise<boolean> {
+    if (isTauri) {
+      const value = await invoke<{ configured: boolean }>("binance_secret_status");
+      return value.configured;
+    }
+    return false;
+  },
+
+  async saveSecret(apiSecret: string): Promise<void> {
+    if (isTauri) await invoke("save_binance_secret", { apiSecret });
+    else await wait();
+  },
+
+  async deleteSecret(): Promise<void> {
+    if (isTauri) await invoke("delete_binance_secret");
+    else await wait();
+  },
+
+  async liveAccount(): Promise<LiveAccount> {
+    if (isTauri) return invoke<LiveAccount>("live_account");
+    await wait(600);
+    throw new Error("浏览器预览无法访问系统钥匙串；请在 Tauri 桌面 App 中查看真实账户。");
+  },
+
+  async liveReconcile(): Promise<LiveReconciliation> {
+    if (isTauri) return invoke<LiveReconciliation>("live_reconcile");
+    await wait(600);
+    throw new Error("浏览器预览无法对账；请在 Tauri 桌面 App 中运行。");
+  },
+
+  async liveAcceptDisclaimer(): Promise<Record<string, unknown>> {
+    if (isTauri) return invoke<Record<string, unknown>>("live_accept_disclaimer");
+    await wait(600);
+    throw new Error("浏览器预览无法签署免责声明；请在 Tauri 桌面 App 中运行。");
+  },
+
+  async liveCancelAll(symbol?: string): Promise<Record<string, unknown>> {
+    if (isTauri) return invoke<Record<string, unknown>>("live_cancel_all", { symbol });
+    await wait(600);
+    throw new Error("浏览器预览无法撤单；请在 Tauri 桌面 App 中运行。");
+  },
+
+  /**
+   * Preview (submit=false) or place real orders (submit=true).
+   * The confirmation phrase is validated in Rust and again in Python.
+   */
+  async runLiveCycle(
+    settings: DesktopSettings,
+    options: { confirmation: string; submit: boolean },
+  ): Promise<LiveCycleResult> {
+    if (isTauri) {
+      return invoke<LiveCycleResult>("run_live_cycle", {
+        tickers: settings.universe,
+        riskConfig: settings.risk,
+        researchConfig: settings.research,
+        confirmation: options.confirmation,
+        submit: options.submit,
+      });
+    }
+    await wait(900);
+    throw new Error("浏览器预览无法执行实盘链路；请在 Tauri 桌面 App 中运行。");
   },
 
   async saveAIKey(apiKey: string): Promise<void> {

@@ -241,3 +241,29 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* ── Live trading page ─────────────────────────────────────────────── */
+.settings-page .connection-status { margin-bottom: 0; }
+
+.metric-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1px; margin: 14px 0; background: var(--line); border: 1px solid var(--line); }
+.metric-row > div { display: flex; flex-direction: column; gap: 5px; padding: 12px 14px; background: var(--paper); }
+.metric-row span { color: var(--muted); font-size: 9px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; }
+.metric-row strong { font-family: var(--mono); font-size: 15px; }
+
+.data-table { width: 100%; margin: 12px 0 4px; border-collapse: collapse; font-size: 10px; }
+.data-table th { padding: 8px 10px; color: var(--muted); font-size: 9px; font-weight: 600; letter-spacing: 0.09em; text-align: left; text-transform: uppercase; border-bottom: 1px solid var(--line-dark); }
+.data-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.data-table tbody tr:hover { background: var(--paper-deep); }
+.data-table td.mono { font-family: var(--mono); font-weight: 600; }
+
+.muted-note { margin: 10px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.warn-note { margin: 10px 0 0; padding: 9px 11px; color: var(--amber); font-size: 10px; line-height: 1.6; background: var(--amber-soft); border-left: 2px solid var(--amber); }
+.reject-reason { color: var(--risk); font-size: 9px; line-height: 1.5; }
+
+.live-exec-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: end; margin-top: 6px; }
+.live-exec-grid .field-label { margin: 0; }
+.live-result { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+
+@media (max-width: 900px) {
+  .live-exec-grid { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+}

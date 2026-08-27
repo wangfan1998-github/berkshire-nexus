@@ -32,15 +32,19 @@ import {
   TrendingUp,
   WalletCards,
   X,
+  Zap,
 } from "lucide-react";
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { desktopBridge } from "./bridge";
 import { defaultSettings } from "./mock";
+import { LIVE_ACKNOWLEDGEMENT } from "./types";
 import type {
   AnalysisReport,
   AppSnapshot,
   DesktopSettings,
   Execution,
+  LiveAccount,
+  LiveCycleResult,
   PageId,
   RiskConfig,
 } from "./types";
@@ -57,6 +61,12 @@ type BusyAction =
   | "ai-test"
   | "preflight"
   | "promote"
+  | "secret"
+  | "live-account"
+  | "reconcile"
+  | "disclaimer"
+  | "live-preview"
+  | "live-submit"
   | null;
 
 type Toast = { id: number; tone: "success" | "error" | "info"; message: string };
@@ -66,6 +76,7 @@ const navItems: Array<{ id: PageId; label: string; description: string; icon: ty
   { id: "research", label: "研究", description: "证据与裁决", icon: Search },
   { id: "ai", label: "AI 投研", description: "模型与数据源", icon: BrainCircuit },
   { id: "portfolio", label: "组合", description: "模拟资产", icon: WalletCards },
+  { id: "live", label: "实盘", description: "真实账户与下单", icon: Zap },
   { id: "agent", label: "Agent", description: "循环与任务", icon: Bot },
   { id: "models", label: "策略学习", description: "Champion / Challenger", icon: FlaskConical },
   { id: "risk", label: "风控", description: "确定性边界", icon: ShieldCheck },
@@ -78,6 +89,7 @@ const pageMeta: Record<PageId, { eyebrow: string; title: string; intro: string }
   research: { eyebrow: "RESEARCH / EVIDENCE", title: "股票研究", intro: "并行检验瓶颈、商业质量、估值、量化因子与失败条件。" },
   ai: { eyebrow: "INTELLIGENCE / PROVIDERS", title: "AI 投研配置", intro: "把最新行情、新闻证据与可配置模型接入同一条可审计研究链。" },
   portfolio: { eyebrow: "PAPER BOOK / CAPITAL", title: "模拟组合", intro: "资本、持仓和成交使用同一套可追溯账本。" },
+  live: { eyebrow: "LIVE / REAL MONEY", title: "实盘账户与执行", intro: "从 Binance 读取真实现金与持仓；下单需要 Secret 与确认短语双重放行。" },
   agent: { eyebrow: "AUTOMATION / PAPER", title: "Agent 运行台", intro: "启动有界的研究—风控—模拟成交循环，可在系统托盘持续运行。" },
   models: { eyebrow: "LEARNING / REGISTRY", title: "策略学习", intro: "Champion / Challenger 只学习收益映射；它不是生成研究文本的大模型。" },
   risk: { eyebrow: "RISK / DETERMINISTIC", title: "风控边界", intro: "这些规则独立于模型，并且桌面端只能收紧默认安全阈值。" },
@@ -1027,10 +1039,223 @@ function SettingsPage({
       <section className="ruled-section system-boundary">
         <SectionHeading index="03" title="当前系统边界" action={<button className="secondary-button" disabled={busy !== null} onClick={() => void onSaveSettings()}><Save size={15} />保存全部设置</button>} />
         <div className="boundary-grid">
-          <div><CircleCheck size={17} /><span><strong>可以在 App 内完成</strong>保存/删除 Binance 与 AI Key、Provider 测试、当前数据/新闻研究、模拟交易、Agent 启停、策略晋升、风控和审计。</span></div>
+          <div><CircleCheck size={17} /><span><strong>可以在 App 内完成</strong>保存/删除 Binance Key 与 Secret、AI Key、Provider 测试、当前数据/新闻研究、模拟交易、真实持仓读取、实盘预览与下单、撤单、订单恢复对账、Agent 启停、策略晋升、风控和审计。</span></div>
           <div><CircleAlert size={17} /><span><strong>仍需 Binance 官方界面</strong>开户、身份验证、Stocks 资格、API Key 创建、权限/IP 配置与账户合规确认。</span></div>
-          <div><LockKeyhole size={17} /><span><strong>暂未开放</strong>真实下单、真实现金/持仓同步、撤单、订单恢复和重启对账。</span></div>
+          <div><LockKeyhole size={17} /><span><strong>实盘双重确认</strong>真实下单需要 Secret 已配置、输入确认短语，并且每次提交都是显式操作；Agent 自动循环仍只走模拟盘。</span></div>
         </div>
+      </section>
+    </div>
+  );
+}
+
+/** Real account, reconciliation, and the gated live execution path. */
+function LivePage({
+  settings,
+  keyConfigured,
+  secretConfigured,
+  account,
+  cycle,
+  busy,
+  onSaveSecret,
+  onDeleteSecret,
+  onLoadAccount,
+  onReconcile,
+  onAcceptDisclaimer,
+  onCancelAll,
+  onRunCycle,
+}: {
+  settings: DesktopSettings;
+  keyConfigured: boolean;
+  secretConfigured: boolean;
+  account: LiveAccount | null;
+  cycle: LiveCycleResult | null;
+  busy: BusyAction;
+  onSaveSecret: (secret: string) => Promise<void>;
+  onDeleteSecret: () => Promise<void>;
+  onLoadAccount: () => Promise<void>;
+  onReconcile: () => Promise<void>;
+  onAcceptDisclaimer: () => Promise<void>;
+  onCancelAll: () => Promise<void>;
+  onRunCycle: (options: { confirmation: string; submit: boolean }) => Promise<void>;
+}) {
+  const [secret, setSecret] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const ready = keyConfigured && secretConfigured;
+  const acknowledged = confirmation.trim() === LIVE_ACKNOWLEDGEMENT;
+
+  const submitSecret = (event: FormEvent) => {
+    event.preventDefault();
+    void onSaveSecret(secret).then(() => setSecret("")).catch(() => undefined);
+  };
+
+  return (
+    <div className="page-stack settings-page">
+      <section className="connection-status">
+        <div className={`connection-emblem ${ready ? "connected" : ""}`}>{ready ? <CircleCheck size={25} /> : <KeyRound size={25} />}</div>
+        <div>
+          <span className="mono">BINANCE STOCKS / LIVE</span>
+          <h2>{ready ? "已具备读取真实账户与下单的凭证" : secretConfigured ? "缺少 API Key" : "缺少 API Secret"}</h2>
+          <p>读取余额、持仓与挂单需要签名接口，因此必须同时配置 Key 和 Secret。下单额外需要输入确认短语。</p>
+        </div>
+        <StatusMark tone={ready ? "good" : "warn"}>{ready ? "凭证完整" : "待配置"}</StatusMark>
+      </section>
+
+      <div className="two-column equal settings-grid">
+        <section className="ruled-section form-section">
+          <SectionHeading index="01" title="保存 API Secret" note="Secret 仅存入 macOS 钥匙串，前端无法回显，也不会写入任何配置文件。" />
+          <form onSubmit={submitSecret}>
+            <label className="field-label">
+              <span>BINANCE_API_SECRET</span>
+              <div className="secret-input"><KeyRound size={16} /><input type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder={secretConfigured ? "输入新 Secret 可替换现有值" : "粘贴 API Secret"} autoComplete="off" spellCheck={false} /></div>
+            </label>
+            <div className="button-row">
+              <button className="primary-button" type="submit" disabled={busy !== null || secret.trim().length < 16}>{busy === "secret" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}存入钥匙串</button>
+              {secretConfigured && <button className="danger-text-button" type="button" disabled={busy !== null} onClick={() => void onDeleteSecret()}><Trash2 size={15} />删除 Secret</button>}
+            </div>
+          </form>
+          <div className="preflight-row">
+            <div><strong>签署美股免责声明</strong><p>Binance 要求先签署 US Equity Disclaimer，否则所有下单都会被拒绝（错误码 486410）。</p></div>
+            <button className="secondary-button" disabled={!ready || busy !== null} onClick={() => void onAcceptDisclaimer()}>{busy === "disclaimer" ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}签署</button>
+          </div>
+        </section>
+
+        <section className="ruled-section form-section">
+          <SectionHeading index="02" title="真实账户" action={<button className="secondary-button" disabled={!ready || busy !== null} onClick={() => void onLoadAccount()}>{busy === "live-account" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}读取</button>} />
+          {!account ? (
+            <p className="muted-note">尚未读取。点击「读取」从 Binance 拉取真实现金、持仓与挂单。</p>
+          ) : (
+            <>
+              <div className="metric-row">
+                <div><span>现金</span><strong>{money.format(account.cash)}</strong></div>
+                <div><span>持仓市值</span><strong>{money.format(account.holdings_value)}</strong></div>
+                <div><span>总权益</span><strong>{money.format(account.equity)}</strong></div>
+              </div>
+              {account.positions.length === 0 ? (
+                <p className="muted-note">当前没有股票持仓。</p>
+              ) : (
+                <table className="data-table">
+                  <thead><tr><th>标的</th><th>数量</th><th>价格</th><th>市值</th><th>占比</th><th>钱包</th></tr></thead>
+                  <tbody>
+                    {account.positions.map((position) => (
+                      <tr key={position.ticker}>
+                        <td className="mono">{position.ticker}</td>
+                        <td>{position.quantity.toFixed(6)}</td>
+                        <td>{position.price > 0 ? money.format(position.price) : "—"}</td>
+                        <td>{position.market_value > 0 ? money.format(position.market_value) : "—"}</td>
+                        <td>{position.weight_pct.toFixed(2)}%</td>
+                        <td className="mono">{position.wallets.join("/")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {Object.keys(account.quote_errors).length > 0 && (
+                <p className="muted-note">部分标的未取到价格，市值按 0 计：{Object.keys(account.quote_errors).join("、")}</p>
+              )}
+              {Object.keys(account.wallet_errors).length > 0 && (
+                <p className="warn-note">钱包读取告警：{Object.entries(account.wallet_errors).map(([wallet, message]) => `${wallet}: ${message}`).join("；")}</p>
+              )}
+            </>
+          )}
+        </section>
+      </div>
+
+      <section className="ruled-section">
+        <SectionHeading
+          index="03"
+          title="挂单与对账"
+          note="重启后先对账：本地记录的每一笔订单都会去交易所核实真实状态。"
+          action={
+            <div className="button-row">
+              <button className="secondary-button" disabled={!ready || busy !== null} onClick={() => void onReconcile()}>{busy === "reconcile" ? <LoaderCircle className="spin" size={15} /> : <Activity size={15} />}对账</button>
+              <button className="danger-text-button" disabled={!ready || busy !== null} onClick={() => void onCancelAll()}><X size={15} />全部撤单</button>
+            </div>
+          }
+        />
+        {account?.pending_local_orders && <p className="warn-note">存在尚未确认状态的本地订单，请先对账再下单。</p>}
+        {account && account.open_orders.length === 0 && !account.open_orders_error && <p className="muted-note">交易所无working挂单。</p>}
+        {account?.open_orders_error && <p className="warn-note">挂单读取失败：{account.open_orders_error}</p>}
+        {account && account.open_orders.length > 0 && (
+          <table className="data-table">
+            <thead><tr><th>标的</th><th>方向</th><th>类型</th><th>状态</th><th>数量</th><th>已成交</th><th>限价</th></tr></thead>
+            <tbody>
+              {account.open_orders.map((order) => (
+                <tr key={order.order_id || order.client_order_id}>
+                  <td className="mono">{order.ticker}</td>
+                  <td>{order.side}</td>
+                  <td>{order.order_type}</td>
+                  <td>{order.status}</td>
+                  <td>{order.quantity}</td>
+                  <td>{order.filled_quantity}</td>
+                  <td>{order.limit_price > 0 ? money.format(order.limit_price) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section className="ruled-section">
+        <SectionHeading index="04" title="实盘执行" note={`标的：${settings.universe.join("、")}。预览不会下单；提交需要确认短语。`} />
+        <div className="live-exec-grid">
+          <label className="field-label">
+            <span>确认短语（下单必填）</span>
+            <div className="secret-input"><LockKeyhole size={16} /><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={LIVE_ACKNOWLEDGEMENT} autoComplete="off" spellCheck={false} /></div>
+          </label>
+          <div className="button-row">
+            <button className="secondary-button" disabled={!ready || busy !== null} onClick={() => void onRunCycle({ confirmation: "", submit: false })}>{busy === "live-preview" ? <LoaderCircle className="spin" size={15} /> : <FlaskConical size={15} />}预览（不下单）</button>
+            <button className="danger-button" disabled={!ready || busy !== null || !acknowledged} onClick={() => void onRunCycle({ confirmation: confirmation.trim(), submit: true })}>{busy === "live-submit" ? <LoaderCircle className="spin" size={15} /> : <Zap size={15} />}提交真实订单</button>
+          </div>
+        </div>
+        {!acknowledged && confirmation.trim().length > 0 && <p className="warn-note">确认短语不匹配，必须与 {LIVE_ACKNOWLEDGEMENT} 完全一致。</p>}
+
+        {cycle && (
+          <div className="live-result">
+            <div className="metric-row">
+              <div><span>模式</span><strong>{cycle.mode === "live" ? "已提交实盘" : "仅预览"}</strong></div>
+              <div><span>通过风控</span><strong>{cycle.approved_count} / {cycle.risk_decisions.length}</strong></div>
+              <div><span>已提交</span><strong>{cycle.executions.length}</strong></div>
+            </div>
+            {cycle.blocked_reason && <p className="muted-note">未提交原因：{cycle.blocked_reason}</p>}
+            {cycle.risk_decisions.length === 0 && <p className="muted-note">本轮没有产生任何目标订单。</p>}
+            {cycle.risk_decisions.length > 0 && (
+              <table className="data-table">
+                <thead><tr><th>标的</th><th>方向</th><th>数量</th><th>限价</th><th>金额</th><th>风控</th></tr></thead>
+                <tbody>
+                  {cycle.risk_decisions.map((decision, index) => (
+                    <tr key={`${decision.order.ticker}-${index}`}>
+                      <td className="mono">{decision.order.ticker}</td>
+                      <td>{decision.order.side}</td>
+                      <td>{decision.order.quantity}</td>
+                      <td>{decision.order.limit_price ? money.format(decision.order.limit_price) : "—"}</td>
+                      <td>{money.format(decision.calculated_notional)}</td>
+                      <td>{decision.approved ? <StatusMark tone="good">通过</StatusMark> : <span className="reject-reason">{decision.reasons.join("；")}</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {cycle.executions.length > 0 && (
+              <>
+                <SectionHeading index="05" title="交易所回执" note="ACCEPTED 表示已挂单，不等于成交；成交状态由对账确认。" />
+                <table className="data-table">
+                  <thead><tr><th>标的</th><th>方向</th><th>状态</th><th>已成交</th><th>说明</th></tr></thead>
+                  <tbody>
+                    {cycle.executions.map((execution, index) => (
+                      <tr key={`${execution.ticker}-${index}`}>
+                        <td className="mono">{execution.ticker}</td>
+                        <td>{execution.side}</td>
+                        <td>{execution.status}</td>
+                        <td>{execution.filled_quantity}</td>
+                        <td className="muted">{execution.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
+        )}
       </section>
     </div>
   );
@@ -1045,6 +1270,9 @@ export default function App() {
   const [agentRunning, setAgentRunning] = useState(false);
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [aiKeyConfigured, setAIKeyConfigured] = useState(false);
+  const [secretConfigured, setSecretConfigured] = useState(false);
+  const [liveAccount, setLiveAccount] = useState<LiveAccount | null>(null);
+  const [liveCycle, setLiveCycle] = useState<LiveCycleResult | null>(null);
   const [busy, setBusy] = useState<BusyAction>("boot");
   const [toast, setToast] = useState<Toast | null>(null);
   const [modeExplanation, setModeExplanation] = useState(false);
@@ -1079,12 +1307,13 @@ export default function App() {
     let alive = true;
     const boot = async () => {
       try {
-        const [nextSettings, nextSnapshot, runtime, configured, aiConfigured] = await Promise.all([
+        const [nextSettings, nextSnapshot, runtime, configured, aiConfigured, secretReady] = await Promise.all([
           desktopBridge.loadSettings(),
           desktopBridge.snapshot(),
           desktopBridge.agentStatus(),
           desktopBridge.keyStatus(),
           desktopBridge.aiKeyStatus(),
+          desktopBridge.secretStatus(),
         ]);
         if (!alive) return;
         setSettings(nextSettings);
@@ -1092,6 +1321,7 @@ export default function App() {
         setAgentRunning(runtime.running);
         setKeyConfigured(configured);
         setAIKeyConfigured(aiConfigured);
+        setSecretConfigured(secretReady);
       } catch (error) {
         if (alive) notify("error", `桌面应用初始化失败：${asError(error)}`);
       } finally {
@@ -1266,6 +1496,110 @@ export default function App() {
     }
   };
 
+  const saveSecret = async (value: string) => {
+    setBusy("secret");
+    try {
+      await desktopBridge.saveSecret(value);
+      setSecretConfigured(true);
+      notify("success", "Binance API Secret 已存入钥匙串");
+    } catch (error) {
+      notify("error", `保存 Secret 失败：${asError(error)}`);
+      throw error;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const deleteSecret = async () => {
+    setBusy("secret");
+    try {
+      await desktopBridge.deleteSecret();
+      setSecretConfigured(false);
+      setLiveAccount(null);
+      notify("success", "Binance API Secret 已删除");
+    } catch (error) {
+      notify("error", `删除 Secret 失败：${asError(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const loadLiveAccount = async () => {
+    setBusy("live-account");
+    try {
+      const value = await desktopBridge.liveAccount();
+      setLiveAccount(value);
+      notify("success", `已读取真实账户：现金 ${money.format(value.cash)}，持仓 ${value.positions.length} 个`);
+    } catch (error) {
+      notify("error", `读取真实账户失败：${asError(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const reconcileLive = async () => {
+    setBusy("reconcile");
+    try {
+      const value = await desktopBridge.liveReconcile();
+      const settled = value.settled.length;
+      const open = value.still_open.length;
+      const unresolved = value.unresolved.length;
+      notify(
+        unresolved > 0 ? "error" : "success",
+        `对账完成：核实 ${value.checked} 笔，已结清 ${settled}，仍挂单 ${open}，未解决 ${unresolved}`,
+      );
+      await loadLiveAccount();
+    } catch (error) {
+      notify("error", `对账失败：${asError(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const acceptDisclaimer = async () => {
+    setBusy("disclaimer");
+    try {
+      await desktopBridge.liveAcceptDisclaimer();
+      notify("success", "已签署 Binance 美股免责声明");
+    } catch (error) {
+      notify("error", `签署失败：${asError(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const cancelAllLive = async () => {
+    setBusy("reconcile");
+    try {
+      await desktopBridge.liveCancelAll();
+      notify("success", "已请求撤销全部挂单");
+      await loadLiveAccount();
+    } catch (error) {
+      notify("error", `撤单失败：${asError(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runLiveCycle = async (options: { confirmation: string; submit: boolean }) => {
+    setBusy(options.submit ? "live-submit" : "live-preview");
+    try {
+      await desktopBridge.saveSettings(settings);
+      const value = await desktopBridge.runLiveCycle(settings, options);
+      setLiveCycle(value);
+      if (value.submitted) {
+        notify("success", `实盘已提交 ${value.executions.length} 笔订单，请对账确认成交`);
+        await loadLiveAccount();
+      } else {
+        notify("info", `预览完成：${value.approved_count}/${value.risk_decisions.length} 笔通过风控，未提交任何订单`);
+      }
+    } catch (error) {
+      notify("error", `实盘链路失败：${asError(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const meta = pageMeta[page];
   const pageContent = useMemo(() => {
     if (!snapshot) return <LoadingPage />;
@@ -1274,6 +1608,7 @@ export default function App() {
       case "research": return <Research settings={settings} reports={reports} selectedTicker={selectedTicker} busy={busy === "research"} onAnalyze={analyze} onSelect={setSelectedTicker} />;
       case "ai": return <AISettingsPage settings={settings} configured={aiKeyConfigured} busy={busy} onSettings={setSettings} onSaveSettings={() => saveSettings("AI 与数据源配置已保存")} onSaveKey={saveAIKey} onDeleteKey={deleteAIKey} onTest={testAI} />;
       case "portfolio": return <Portfolio snapshot={snapshot} />;
+      case "live": return <LivePage settings={settings} keyConfigured={keyConfigured} secretConfigured={secretConfigured} account={liveAccount} cycle={liveCycle} busy={busy} onSaveSecret={saveSecret} onDeleteSecret={deleteSecret} onLoadAccount={loadLiveAccount} onReconcile={reconcileLive} onAcceptDisclaimer={acceptDisclaimer} onCancelAll={cancelAllLive} onRunCycle={runLiveCycle} />;
       case "agent": return <AgentPage snapshot={snapshot} settings={settings} running={agentRunning} busy={busy === "agent" || busy === "cycle"} onSettings={setSettings} onStart={startAgent} onStop={stopAgent} onCycle={runCycle} />;
       case "models": return <Models snapshot={snapshot} busy={busy === "promote"} onPromote={promote} />;
       case "risk": return <RiskPage settings={settings} onSettings={setSettings} onSave={() => saveSettings("风控设置已保存")} busy={busy === "save"} />;
@@ -1281,7 +1616,7 @@ export default function App() {
       case "settings": return <SettingsPage settings={settings} configured={keyConfigured} busy={busy} onSaveKey={saveKey} onDeleteKey={deleteKey} onPreflight={preflight} onSaveSettings={saveSettings} />;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, snapshot, settings, reports, selectedTicker, busy, agentRunning, keyConfigured, aiKeyConfigured]);
+  }, [page, snapshot, settings, reports, selectedTicker, busy, agentRunning, keyConfigured, aiKeyConfigured, secretConfigured, liveAccount, liveCycle]);
 
   return (
     <div className="app-shell">
@@ -1318,8 +1653,16 @@ export default function App() {
           <div className="topbar-actions">
             {snapshot?.demo && <span className="demo-badge">浏览器演示数据</span>}
             <div className="mode-selector" aria-label="交易模式">
-              <button className="active"><FlaskConical size={14} />Paper</button>
-              <button className="locked" aria-describedby="live-mode-note" onClick={() => setModeExplanation(true)}><LockKeyhole size={13} />Live</button>
+              <button className={page === "live" ? "" : "active"} onClick={() => setPage("portfolio")}><FlaskConical size={14} />Paper</button>
+              {/* Live is reachable once credentials exist; without a Secret it
+                  explains what is missing instead of silently doing nothing. */}
+              <button
+                className={page === "live" ? "active" : secretConfigured && keyConfigured ? "" : "locked"}
+                aria-describedby={secretConfigured && keyConfigured ? undefined : "live-mode-note"}
+                onClick={() => (secretConfigured && keyConfigured ? setPage("live") : setModeExplanation(true))}
+              >
+                {secretConfigured && keyConfigured ? <Zap size={13} /> : <LockKeyhole size={13} />}Live
+              </button>
             </div>
             <button className="icon-button" aria-label="刷新状态" title="刷新状态" disabled={busy !== null} onClick={() => void refresh()}><RefreshCw className={busy === "refresh" ? "spin" : ""} size={17} /></button>
           </div>
@@ -1340,15 +1683,15 @@ export default function App() {
           <section className="safety-modal" role="dialog" aria-modal="true" aria-labelledby="live-mode-title" id="live-mode-note">
             <button className="modal-close" aria-label="关闭" onClick={() => setModeExplanation(false)}><X size={17} /></button>
             <div className="modal-lock"><LockKeyhole size={25} /></div>
-            <span className="mono">LIVE EXECUTION / LOCKED</span>
-            <h2 id="live-mode-title">实盘不是一个提前开放的开关</h2>
-            <p>在 App 能从 Binance 获取权威现金与持仓、恢复重启期间的订单，并逐笔完成成交对账之前，真实下单会保持锁定。</p>
+            <span className="mono">LIVE EXECUTION / CREDENTIALS REQUIRED</span>
+            <h2 id="live-mode-title">实盘需要 Key 和 Secret 同时就位</h2>
+            <p>读取真实现金、持仓与挂单，以及下单撤单，走的都是 Binance 签名接口，必须用 API Secret 做 HMAC-SHA256 签名。只有 API Key 是不够的。</p>
             <ul>
-              <li><Check size={15} />API Key 钥匙串存储与只读预检已可用</li>
-              <li><Check size={15} />确定性风控与模拟成交审计已可用</li>
-              <li><Pause size={15} />真实账户快照、订单恢复与对账尚未完成</li>
+              <li>{keyConfigured ? <Check size={15} /> : <Pause size={15} />}API Key {keyConfigured ? "已配置" : "尚未配置"}</li>
+              <li>{secretConfigured ? <Check size={15} /> : <Pause size={15} />}API Secret {secretConfigured ? "已配置" : "尚未配置（实盘页可保存）"}</li>
+              <li><Check size={15} />订单恢复、成交对账与确定性风控已就绪</li>
             </ul>
-            <button className="primary-button" onClick={() => { setModeExplanation(false); setPage("settings"); }}>查看 Binance 设置</button>
+            <button className="primary-button" onClick={() => { setModeExplanation(false); setPage("live"); }}>前往实盘页配置</button>
           </section>
         </div>
       )}

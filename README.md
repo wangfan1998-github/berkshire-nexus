@@ -199,7 +199,35 @@ export BINANCE_API_KEY='your-read-only-key'
 python3 -m src.cli binance-preflight AAPL MSFT
 ```
 
-当前版本**没有暴露一键实盘 CLI**。原因是自动实盘前还必须实现并验证 Binance 权威持仓/现金快照、订单状态回补和重启对账；用本地模拟持仓替代真实账户状态是不安全的。底层 `BinanceStocksClient.place_order()` 已实现，但需要同时满足构造参数 `allow_live_orders=True` 和进程确认变量 `BERKSHIRE_NEXUS_LIVE_TRADING=I_ACKNOWLEDGE_REAL_MONEY`，且固定发送 `tokenize=false`。
+#### 真实账户读取与实盘下单
+
+读取余额/持仓/挂单以及下单都走**签名接口**，因此除 Key 之外必须配置 Secret（HMAC-SHA256 签名）。桌面端把两者分别存入 macOS 钥匙串，Python 侧只从环境变量读取：
+
+```bash
+export BINANCE_API_KEY='your-key'
+export BINANCE_API_SECRET='your-secret'
+
+# 首次必须签署美股免责声明，否则所有下单返回 486410
+python3 -m src.desktop.cli --state-dir .berkshire-nexus live-accept-disclaimer
+
+# 真实现金、持仓、挂单
+python3 -m src.desktop.cli --state-dir .berkshire-nexus live-account
+
+# 重启后先对账：核实每一笔本地记录订单的真实状态
+python3 -m src.desktop.cli --state-dir .berkshire-nexus live-reconcile
+
+# 预览（默认不下单）
+python3 -m src.desktop.cli --state-dir .berkshire-nexus live-cycle AAPL MSFT
+
+# 真实下单：三重放行缺一不可
+export BERKSHIRE_NEXUS_LIVE_TRADING=I_ACKNOWLEDGE_REAL_MONEY
+python3 -m src.desktop.cli --state-dir .berkshire-nexus live-cycle AAPL MSFT \
+  --confirmation I_ACKNOWLEDGE_REAL_MONEY --submit
+```
+
+**关于持仓来源**：Binance 没有 `/sapi/v1/equity/account` 这类持仓接口。成交后的股票以普通资产落在钱包里（默认 `CARD` 资金钱包，订单指定 `walletType=MAIN` 时落在现货钱包）。因此持仓由「钱包余额 ∩ 可交易股票池」还原，而不是累加成交历史——后者会漏掉 mint、划转和公司行为。
+
+**关于订单状态**：`/order/place` 返回的 `status` 只是受理码（`S` 受理 / `F` 失败），**不等于成交**。受理后订单记为 `ACCEPTED`，真实成交量与均价一律由对账从交易所回读。POST 请求遇到网络错误时订单可能已到达交易所，此时记为 `UNKNOWN` 并留给对账处理，绝不自动重试。
 
 所有订单都必须经过与模型隔离的确定性风控。默认规则包括：
 
@@ -207,8 +235,13 @@ python3 -m src.cli binance-preflight AAPL MSFT
 - 每日总换手不超过组合的 25%；
 - 当日亏损达到 1% 后停止新增风险；
 - 实盘默认禁用市价单；
-- 含预置、回退或推断数据的分析不能触发实盘买入；完整的 Yahoo/Nasdaq 第三方研究数据同样不能代替 Binance 权威账户/订单数据；
+- 含预置、回退或推断数据的分析不能触发实盘买入；
+- 实盘买入还要求价格是**券商权威**的——只有当 Binance 自己的行情接口确认了该价格，订单才放行，避免用第三方研究价格去打真实市场；
+- 上一轮存在未解决订单时拒绝开新仓；
+- 标的 `tradability` 为 `NONE`/单向时在发请求前就拦截；
 - 风险开关触发后仍允许合法的减仓卖出。
+
+Agent 自动循环仍然只走模拟盘——实盘每一次提交都必须是显式操作。
 
 Binance Stocks 的账户资格、地区限制、PDT、交易时段和免责声明要求仍由 Binance 与当地法规决定。官方没有文档化的 Stocks 测试网，因此本项目把本地模拟盘作为上线前必经阶段。
 

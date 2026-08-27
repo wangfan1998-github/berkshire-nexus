@@ -15,8 +15,15 @@ from ..core.orchestrator import ComprehensiveAnalysisReport, OmniAlphaOrchestrat
 from ..learning.registry import ChampionChallengerRegistry
 from ..research.ai import AIResearchService
 from ..research.config import ResearchConfig
-from ..trading.binance_stocks import BinanceStocksClient
-from ..trading.risk import RiskPolicy
+from ..trading.binance_stocks import (
+    LIVE_ACKNOWLEDGEMENT,
+    BinanceAPIError,
+    BinanceStocksClient,
+    merge_quote_price,
+)
+from ..trading.live import LiveBroker
+from ..trading.planner import AllocationPlanner
+from ..trading.risk import DeterministicRiskEngine, RiskPolicy
 
 
 def json_safe(value: Any) -> Any:
@@ -181,6 +188,228 @@ class DesktopService:
         return json_safe(BinanceStocksClient(api_key=api_key).preflight(
             DesktopService._tickers(tickers)
         ))
+
+    # ------------------------------------------------------------------
+    # Live account (read-only) and live execution
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _live_client(
+        api_key: str,
+        api_secret: str,
+        *,
+        allow_live_orders: bool = False,
+    ) -> BinanceStocksClient:
+        if not api_key:
+            raise ValueError("Binance API Key is not configured")
+        if not api_secret:
+            raise ValueError(
+                "Binance API Secret is required to read balances or place orders"
+            )
+        return BinanceStocksClient(
+            api_key=api_key,
+            api_secret=api_secret,
+            allow_live_orders=allow_live_orders,
+        )
+
+    def live_account(self, api_key: str, api_secret: str) -> Dict[str, Any]:
+        """Authoritative cash, holdings and working orders straight from Binance."""
+
+        client = self._live_client(api_key, api_secret)
+        broker = LiveBroker(client, self.state_directory)
+        account = broker.account_state()
+        try:
+            open_orders = broker.open_orders()
+            open_orders_error = ""
+        except (BinanceAPIError, ValueError) as error:
+            open_orders = []
+            open_orders_error = str(error)
+
+        positions = list(account.get("positions", []))
+        # Price the positions so the UI can show market value, not just quantity.
+        prices: Dict[str, float] = {}
+        quote_errors: Dict[str, str] = {}
+        for position in positions:
+            ticker = str(position.get("ticker", ""))
+            if not ticker:
+                continue
+            try:
+                prices[ticker] = merge_quote_price(client.latest_quote(ticker))
+            except (BinanceAPIError, ValueError) as error:
+                quote_errors[ticker] = str(error)
+        holdings_value = 0.0
+        for position in positions:
+            price = float(prices.get(str(position.get("ticker", "")), 0.0))
+            market_value = float(position.get("quantity", 0.0)) * price
+            position["price"] = price
+            position["market_value"] = market_value
+            holdings_value += market_value
+        cash = float(account.get("cash", 0.0))
+        equity = cash + holdings_value
+        for position in positions:
+            position["weight_pct"] = (
+                position["market_value"] / equity * 100.0 if equity > 0.0 else 0.0
+            )
+
+        return json_safe({
+            "fetched_at_utc": account.get("fetched_at_utc"),
+            "cash": cash,
+            "cash_by_asset": account.get("cash_by_asset", {}),
+            "holdings_value": holdings_value,
+            "equity": equity,
+            "positions": positions,
+            "open_orders": open_orders,
+            "open_orders_error": open_orders_error,
+            "pending_local_orders": broker.has_unresolved_orders(),
+            "unclassified_assets": account.get("unclassified_assets", []),
+            "equity_universe_size": account.get("equity_universe_size", 0),
+            "wallet_errors": account.get("wallet_errors", {}),
+            "quote_errors": quote_errors,
+        })
+
+    def live_reconcile(self, api_key: str, api_secret: str) -> Dict[str, Any]:
+        """Resolve every locally tracked order against the exchange."""
+
+        client = self._live_client(api_key, api_secret)
+        return json_safe(LiveBroker(client, self.state_directory).reconcile())
+
+    def live_accept_disclaimer(self, api_key: str, api_secret: str) -> Dict[str, Any]:
+        """Sign the US-equity disclaimer, without which every order is rejected."""
+
+        client = self._live_client(api_key, api_secret)
+        return json_safe({"response": client.accept_disclaimer()})
+
+    def live_cancel_all(
+        self,
+        api_key: str,
+        api_secret: str,
+        symbol: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Cancel working orders. Gated like any other live mutation."""
+
+        client = self._live_client(api_key, api_secret, allow_live_orders=True)
+        return json_safe(
+            LiveBroker(client, self.state_directory).cancel_all_open(symbol)
+        )
+
+    def run_live_cycle(
+        self,
+        tickers: Sequence[str],
+        *,
+        api_key: str,
+        api_secret: str,
+        research_config: Optional[Dict[str, Any]] = None,
+        ai_api_key: str = "",
+        risk_config: Optional[Dict[str, Any]] = None,
+        confirmation: str = "",
+        dry_run: bool = True,
+    ) -> Dict[str, Any]:
+        """Research -> plan -> risk -> (optionally) submit real orders.
+
+        Three independent gates must all pass before any order is sent:
+
+        1. ``confirmation`` must equal the real-money acknowledgement string.
+        2. ``dry_run`` must be False.
+        3. ``BinanceStocksClient`` still requires ``allow_live_orders`` plus the
+           ``BERKSHIRE_NEXUS_LIVE_TRADING`` environment acknowledgement.
+
+        ``dry_run=True`` is the default so an accidental call can only ever
+        preview.
+        """
+
+        normalized = self._tickers(tickers)
+        acknowledged = confirmation.strip() == LIVE_ACKNOWLEDGEMENT
+        submit = acknowledged and not dry_run
+
+        client = self._live_client(api_key, api_secret, allow_live_orders=submit)
+        broker = LiveBroker(client, self.state_directory)
+
+        # Never plan on top of unknown state: settle prior orders first.
+        reconciliation = broker.reconcile()
+        if submit and reconciliation.get("unresolved"):
+            raise ValueError(
+                "refusing to trade while previous orders are unresolved; "
+                "reconcile them before enabling live submission"
+            )
+
+        config = ResearchConfig.from_dict(research_config or {})
+        reports = OmniAlphaOrchestrator(config, ai_api_key).compare_multiple(normalized)
+
+        prices: Dict[str, float] = {}
+        venue_priced: List[str] = []
+        for report in reports:
+            ticker = report.financials.ticker
+            try:
+                venue_price = merge_quote_price(client.latest_quote(ticker))
+            except (BinanceAPIError, ValueError):
+                venue_price = 0.0
+            if venue_price > 0.0:
+                prices[ticker] = venue_price
+                venue_priced.append(ticker)
+                # The execution venue itself confirmed this price, so the record
+                # is broker-authoritative for the purpose of the live risk gate.
+                # Research fundamentals are still third-party; the gate exists to
+                # stop stale or invented *prices* reaching the market.
+                report.financials.price = venue_price
+                report.financials.is_authoritative = True
+                report.financials.data_source = (
+                    f"binance-equity-quote+{report.financials.data_source}"
+                )
+            else:
+                # Without a venue price the order would be priced off third-party
+                # data; leave is_authoritative False so the risk engine blocks it.
+                prices[ticker] = float(report.financials.price)
+
+        portfolio = broker.live_portfolio(prices)
+        policy = self._risk_policy(risk_config or {})
+        planner = AllocationPlanner()
+        engine = DeterministicRiskEngine(policy)
+
+        orders = planner.plan(reports, portfolio, None)
+        universe = {}
+        try:
+            universe = client.tradable_symbols()
+        except (BinanceAPIError, ValueError):
+            universe = {}
+
+        decisions: List[Dict[str, Any]] = []
+        executions: List[Dict[str, Any]] = []
+        for order in orders:
+            decision = engine.evaluate(order, portfolio, mode="live")
+            decisions.append({
+                "approved": decision.approved,
+                "reasons": decision.reasons,
+                "order": order.to_dict(),
+                "calculated_notional": decision.calculated_notional,
+                "projected_position_pct": decision.projected_position_pct,
+            })
+            if not submit:
+                continue
+            report = broker.execute(
+                decision,
+                portfolio,
+                tradability=universe.get(order.ticker.upper()),
+            )
+            executions.append(report.to_dict())
+
+        return json_safe({
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "mode": "live" if submit else "dry-run",
+            "submitted": submit,
+            "acknowledged": acknowledged,
+            "blocked_reason": (
+                "" if submit else
+                "confirmation string missing" if not acknowledged else "dry_run enabled"
+            ),
+            "reconciliation": reconciliation,
+            "portfolio": portfolio.to_dict(),
+            "prices": prices,
+            "venue_priced": venue_priced,
+            "reports": [self._report(report) for report in reports],
+            "risk_decisions": decisions,
+            "executions": executions,
+            "approved_count": sum(1 for item in decisions if item["approved"]),
+        })
 
     @staticmethod
     def _report(report: ComprehensiveAnalysisReport) -> Dict[str, Any]:

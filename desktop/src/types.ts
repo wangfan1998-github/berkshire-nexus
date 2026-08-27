@@ -3,6 +3,7 @@ export type PageId =
   | "research"
   | "ai"
   | "portfolio"
+  | "live"
   | "agent"
   | "models"
   | "risk"
@@ -244,4 +245,97 @@ export interface AgentRuntimeStatus {
   running: boolean;
   pid?: number | null;
   status: AppSnapshot["agent"];
+}
+
+/** Phrase the operator must type before any real order is submitted. */
+export const LIVE_ACKNOWLEDGEMENT = "I_ACKNOWLEDGE_REAL_MONEY";
+
+export interface LivePosition {
+  ticker: string;
+  quantity: number;
+  free: number;
+  locked: number;
+  wallets: string[];
+  price: number;
+  market_value: number;
+  weight_pct: number;
+}
+
+export interface LiveOrder {
+  order_id: string;
+  client_order_id: string;
+  ticker: string;
+  side: string;
+  order_type: string;
+  status: string;
+  quantity: number;
+  filled_quantity: number;
+  average_price: number;
+  limit_price: number;
+  fee: number;
+  session: string;
+  updated_at?: string | number | null;
+}
+
+export interface LiveAccount {
+  fetched_at_utc: string;
+  cash: number;
+  cash_by_asset: Record<string, number>;
+  holdings_value: number;
+  equity: number;
+  positions: LivePosition[];
+  open_orders: LiveOrder[];
+  open_orders_error: string;
+  pending_local_orders: boolean;
+  unclassified_assets: Array<{ asset: string; wallet: string; total: number }>;
+  equity_universe_size: number;
+  wallet_errors: Record<string, string>;
+  quote_errors: Record<string, string>;
+}
+
+export interface LiveReconciliation {
+  reconciled_at_utc?: string;
+  checked: number;
+  settled: Execution[];
+  still_open: Array<{
+    client_order_id: string;
+    status: string;
+    filled_quantity: number;
+    ticker: string;
+  }>;
+  unresolved: Array<{ client_order_id: string; reason: string; assumed?: string }>;
+}
+
+export interface LiveRiskDecision {
+  approved: boolean;
+  reasons: string[];
+  order: Record<string, unknown> & {
+    ticker: string;
+    side: "BUY" | "SELL";
+    quantity: number;
+    limit_price: number | null;
+    notional: number;
+    combined_score: number;
+  };
+  calculated_notional: number;
+  projected_position_pct: number;
+}
+
+export interface LiveCycleResult {
+  generated_at_utc: string;
+  mode: "live" | "dry-run";
+  submitted: boolean;
+  acknowledged: boolean;
+  blocked_reason: string;
+  reconciliation: LiveReconciliation;
+  portfolio: {
+    cash: number;
+    quantities: Record<string, number>;
+    prices: Record<string, number>;
+  };
+  prices: Record<string, number>;
+  reports: AnalysisReport[];
+  risk_decisions: LiveRiskDecision[];
+  executions: Execution[];
+  approved_count: number;
 }
