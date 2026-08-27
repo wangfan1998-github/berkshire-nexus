@@ -51,11 +51,13 @@ def classify_wallet_asset(
     asset: str,
     resolution: Optional[Dict[str, Dict[str, Any]]] = None,
     universe: Optional[Set[str]] = None,
+    row: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Resolve a wallet asset to an equity ticker, or None if it is not equity.
 
     Precedence is deliberate, strongest evidence first:
 
+    0. ``stockTicker`` on the wallet row — Binance states the underlying itself.
     1. ``/equity/market/tokenized-assets`` — Binance's own mapping. It also
        carries the multiplier needed to convert a token balance into shares.
     2. ``EQ_`` prefix — the direct-equity naming convention. Trusted on its own
@@ -69,6 +71,18 @@ def classify_wallet_asset(
     value = asset.upper()
     resolution = resolution or {}
     universe = universe or set()
+
+    # Strongest evidence: the wallet row itself names the underlying ticker.
+    # /asset/get-funding-asset returns e.g. {"asset":"EQ_AVGO","stockTicker":"AVGO"}.
+    declared = str((row or {}).get("stockTicker") or "").upper() if row else ""
+    if declared:
+        return {
+            "ticker": declared,
+            "multiplier": 1.0,
+            "multiplier_valid": True,
+            "tokenized": False,
+            "resolved_by": "wallet-stockTicker",
+        }
 
     mapped = resolution.get(value)
     if mapped:
@@ -339,6 +353,83 @@ class BinanceStocksClient:
         payload = self._request("GET", "/sapi/v1/equity/trade/history", params=params, signed=True)
         return _rows(payload, "trades", "data", "rows")
 
+    def wallet_balances(self) -> List[Dict[str, Any]]:
+        """Per-wallet totals across Spot, Funding, Margin, Futures, Earn, etc.
+
+        Used to detect value the position readers do not cover, so the UI can
+        say "money exists elsewhere" instead of silently understating net worth.
+        """
+
+        payload = self._request("GET", "/sapi/v1/asset/wallet/balance", signed=True)
+        return _rows(payload, "data", "balances")
+
+    def earn_account(self) -> Dict[str, Any]:
+        """Simple Earn totals (flexible + locked), valued in BTC and USDT."""
+
+        payload = self._request("GET", "/sapi/v1/simple-earn/account", signed=True)
+        return payload if isinstance(payload, dict) else {}
+
+    def earn_flexible_positions(self) -> List[Dict[str, Any]]:
+        payload = self._request(
+            "GET", "/sapi/v1/simple-earn/flexible/position", params={"size": 100}, signed=True
+        )
+        return _rows(payload, "rows", "data")
+
+    def earn_locked_positions(self) -> List[Dict[str, Any]]:
+        payload = self._request(
+            "GET", "/sapi/v1/simple-earn/locked/position", params={"size": 100}, signed=True
+        )
+        return _rows(payload, "rows", "data")
+
+    def earn_snapshot(self) -> Dict[str, Any]:
+        """Savings/Earn holdings, kept separate from tradable stock positions.
+
+        Earn balances are subscribed into products and are not directly
+        sellable, so they must never inflate the equity the risk engine sizes
+        orders against. They are reported for net-worth display only.
+        """
+
+        result: Dict[str, Any] = {
+            "total_usdt": 0.0,
+            "flexible_usdt": 0.0,
+            "locked_usdt": 0.0,
+            "flexible": [],
+            "locked": [],
+            "errors": {},
+        }
+        try:
+            account = self.earn_account()
+            result["total_usdt"] = _as_float(account.get("totalAmountInUSDT"))
+            result["flexible_usdt"] = _as_float(account.get("totalFlexibleAmountInUSDT"))
+            result["locked_usdt"] = _as_float(account.get("totalLockedInUSDT"))
+        except (BinanceAPIError, ValueError) as error:
+            result["errors"]["account"] = str(error)
+        try:
+            result["flexible"] = [
+                {
+                    "asset": str(_first(row, "asset", default="")).upper(),
+                    "amount": _as_float(_first(row, "totalAmount", "amount")),
+                    "apr": _as_float(_first(row, "latestAnnualPercentageRate")),
+                    "can_redeem": bool(_first(row, "canRedeem", default=True)),
+                }
+                for row in self.earn_flexible_positions()
+            ]
+        except (BinanceAPIError, ValueError) as error:
+            result["errors"]["flexible"] = str(error)
+        try:
+            result["locked"] = [
+                {
+                    "asset": str(_first(row, "asset", default="")).upper(),
+                    "amount": _as_float(_first(row, "amount")),
+                    "duration_days": _as_float(_first(row, "duration")),
+                    "accrual_days": _as_float(_first(row, "accrualDays")),
+                }
+                for row in self.earn_locked_positions()
+            ]
+        except (BinanceAPIError, ValueError) as error:
+            result["errors"]["locked"] = str(error)
+        return result
+
     def account_snapshot(self, *, include_spot: bool = True) -> Dict[str, Any]:
         """Authoritative cash + equity holdings from Binance.
 
@@ -392,7 +483,7 @@ class BinanceStocksClient:
                     cash_by_asset[asset] = cash_by_asset.get(asset, 0.0) + total
                     continue
 
-                resolved = classify_wallet_asset(asset, resolution, universe)
+                resolved = classify_wallet_asset(asset, resolution, universe, row)
                 if resolved is None:
                     unclassified.append({
                         "asset": asset,
@@ -444,7 +535,25 @@ class BinanceStocksClient:
             "equity_universe_size": len(universe),
             "tokenized_map_size": len(resolution),
             "wallet_errors": errors,
+            # Savings/Earn is reported for net worth only. It is subscribed into
+            # products and not directly sellable, so it must not inflate the
+            # equity the risk engine sizes orders against.
+            "earn": self.earn_snapshot(),
+            "wallet_totals": self._wallet_totals(),
         }
+
+    def _wallet_totals(self) -> List[Dict[str, Any]]:
+        try:
+            return [
+                {
+                    "wallet": str(_first(row, "walletName", default="")),
+                    "balance_btc": _as_float(_first(row, "balance")),
+                    "active": bool(_first(row, "activate", default=True)),
+                }
+                for row in self.wallet_balances()
+            ]
+        except (BinanceAPIError, ValueError):
+            return []
 
     # ------------------------------------------------------------------
     # Trading (signed, gated)

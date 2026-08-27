@@ -1152,10 +1152,38 @@ function LivePage({
           ) : (
             <>
               <div className="metric-row">
+                <div><span>可交易权益<br/><small className="muted">风控分母</small></span><strong>{money.format(account.equity)}</strong></div>
                 <div><span>现金</span><strong>{money.format(account.cash)}</strong></div>
-                <div><span>持仓市值</span><strong>{money.format(account.holdings_value)}</strong></div>
-                <div><span>总权益</span><strong>{money.format(account.equity)}</strong></div>
+                <div><span>股票市值</span><strong>{money.format(account.holdings_value)}</strong></div>
+                <div><span>理财 Earn<br/><small className="muted">不参与风控</small></span><strong>{money.format(account.earn_total_usdt ?? 0)}</strong></div>
+                <div><span>净资产</span><strong>{money.format(account.net_worth ?? account.equity)}</strong></div>
               </div>
+              {(account.earn?.flexible?.length || account.earn?.locked?.length) ? (
+                <details className="earn-details">
+                  <summary>理财明细（{(account.earn.flexible?.length ?? 0) + (account.earn.locked?.length ?? 0)} 项，已订阅产品不可直接卖出，因此不计入风控权益）</summary>
+                  <table className="data-table">
+                    <thead><tr><th>类型</th><th>资产</th><th>数量</th><th>备注</th></tr></thead>
+                    <tbody>
+                      {(account.earn.flexible ?? []).map((row) => (
+                        <tr key={`f-${row.asset}`}>
+                          <td>活期</td>
+                          <td className="mono">{row.asset}</td>
+                          <td>{row.amount.toFixed(6)}</td>
+                          <td className="muted">{row.apr > 0 ? `年化 ${(row.apr * 100).toFixed(2)}%` : "—"}{row.can_redeem ? "" : " · 不可赎回"}</td>
+                        </tr>
+                      ))}
+                      {(account.earn.locked ?? []).map((row) => (
+                        <tr key={`l-${row.asset}`}>
+                          <td>定期</td>
+                          <td className="mono">{row.asset}</td>
+                          <td>{row.amount.toFixed(6)}</td>
+                          <td className="muted">{row.duration_days} 天 · 已计息 {row.accrual_days} 天</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </details>
+              ) : null}
               {account.positions.length === 0 ? (
                 <p className="muted-note">当前没有股票持仓。</p>
               ) : (
@@ -1248,6 +1276,59 @@ function LivePage({
             )}
             {cycle.blocked_reason && <p className="muted-note">未提交原因：{cycle.blocked_reason}</p>}
             {cycle.risk_decisions.length === 0 && <p className="muted-note">本轮没有产生任何目标订单。</p>}
+            {cycle.reports?.length > 0 && (
+              <>
+                <SectionHeading index="05" title="分析依据" note="订单不是凭空产生的：下面是本轮每个标的的评分、目标仓位与判定，点开可看完整研报。" />
+                <table className="data-table">
+                  <thead><tr><th>标的</th><th>综合分</th><th>建议</th><th>仓位上限</th><th>安全边际</th><th>瓶颈</th><th>数据来源</th></tr></thead>
+                  <tbody>
+                    {cycle.reports.map((report) => (
+                      <tr key={report.ticker}>
+                        <td className="mono">{report.ticker}</td>
+                        <td><strong>{report.score.toFixed(1)}</strong></td>
+                        <td>{cnRecommendation(report.recommendation)}</td>
+                        <td>{report.risk.recommended_max_allocation_pct.toFixed(1)}%</td>
+                        <td>{report.valuation.margin_of_safety_pct >= 0 ? "+" : ""}{report.valuation.margin_of_safety_pct.toFixed(1)}%</td>
+                        <td>L{report.chokepoint.chokepoint_level}</td>
+                        <td className="muted">{report.is_authoritative ? "券商权威价" : report.verification_level}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {cycle.reports.map((report) => (
+                  <details className="analysis-details" key={`d-${report.ticker}`}>
+                    <summary>{report.ticker} · {report.name} — 大师共识 {report.masters.consensus_score}/5.0 · Qlib {report.quant.quality_score.toFixed(0)}</summary>
+                    <div className="analysis-body">
+                      <p><strong>镜子测试</strong><br />{report.masters.mirror_test_summary}</p>
+                      <p><strong>芒格逆向（什么会让它死）</strong><br />{report.masters.munger_inversion_summary}</p>
+                      <p><strong>估值</strong>：DCF 内在价值 {money.format(report.valuation.intrinsic_value_dcf)}，现价 {money.format(report.price)} — {report.valuation.valuation_status}</p>
+                      <p><strong>风控红线</strong></p>
+                      <ul>{report.risk.redline_failure_criteria.map((line, i) => <li key={i}>{line}</li>)}</ul>
+                      {report.ai_research?.status === "ok" && (
+                        <p><strong>AI 综合</strong>（{report.ai_research.action_bias}，置信度 {(report.ai_research.confidence * 100).toFixed(0)}%）<br />{report.ai_research.summary}</p>
+                      )}
+                      {report.ai_research?.status === "disabled" && (
+                        <p className="muted">AI 综合未启用（可在「AI 投研」页配置模型）。评分完全来自确定性引擎。</p>
+                      )}
+                      {report.news?.items?.length > 0 && (
+                        <>
+                          <p><strong>新闻证据</strong>（{report.news.items.length} 条）</p>
+                          <ul>
+                            {report.news.items.slice(0, 5).map((item) => (
+                              <li key={item.evidence_id}>
+                                <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
+                                <span className="muted"> — {item.publisher}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </div>
+                  </details>
+                ))}
+                <SectionHeading index="06" title="订单明细" note="上面的评分与目标仓位，经确定性风控后得到下列订单。" />
+              </>
+            )}
             {cycle.risk_decisions.length > 0 && (
               <table className="data-table">
                 <thead><tr><th>标的</th><th>方向</th><th>数量</th><th>限价</th><th>金额</th><th>风控</th></tr></thead>

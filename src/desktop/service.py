@@ -251,12 +251,24 @@ class DesktopService:
                 position["market_value"] / equity * 100.0 if equity > 0.0 else 0.0
             )
 
+        # Earn/savings is deliberately NOT part of `equity`: those balances are
+        # subscribed into products and are not directly sellable, so letting them
+        # inflate equity would loosen every risk limit. They are reported
+        # alongside so net worth is complete and nothing looks "missing".
+        earn = dict(account.get("earn", {}))
+        earn_total = float(earn.get("total_usdt", 0.0))
+
         return json_safe({
             "fetched_at_utc": account.get("fetched_at_utc"),
             "cash": cash,
             "cash_by_asset": account.get("cash_by_asset", {}),
             "holdings_value": holdings_value,
             "equity": equity,
+            "tradable_equity": equity,
+            "earn": earn,
+            "earn_total_usdt": earn_total,
+            "net_worth": equity + earn_total,
+            "wallet_totals": account.get("wallet_totals", []),
             "positions": positions,
             "open_orders": open_orders,
             "open_orders_error": open_orders_error,

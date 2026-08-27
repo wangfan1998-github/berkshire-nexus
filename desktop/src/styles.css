@@ -267,3 +267,15 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 @media (max-width: 900px) {
   .live-exec-grid { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
 }
+
+/* ── Earn breakdown and analysis rationale ─────────────────────────── */
+.earn-details, .analysis-details { margin-top: 10px; border-top: 1px solid var(--line); }
+.earn-details summary, .analysis-details summary { padding: 10px 0; color: var(--muted); font-size: 10px; cursor: pointer; }
+.earn-details summary:hover, .analysis-details summary:hover { color: var(--ink); }
+.analysis-body { padding: 4px 0 14px; font-size: 10px; line-height: 1.7; }
+.analysis-body p { margin: 0 0 10px; }
+.analysis-body strong { font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; }
+.analysis-body ul { margin: 0 0 10px; padding-left: 16px; color: var(--muted); }
+.analysis-body li { margin-bottom: 4px; }
+.analysis-body a { color: var(--green-dark); }
+.metric-row small { font-weight: 400; letter-spacing: 0; text-transform: none; }

@@ -290,12 +290,40 @@ export interface LiveOrder {
   updated_at?: string | number | null;
 }
 
+export interface EarnPosition {
+  asset: string;
+  amount: number;
+  apr: number;
+  can_redeem: boolean;
+}
+
+export interface EarnLockedPosition {
+  asset: string;
+  amount: number;
+  duration_days: number;
+  accrual_days: number;
+}
+
+export interface EarnSnapshot {
+  total_usdt: number;
+  flexible_usdt: number;
+  locked_usdt: number;
+  flexible: EarnPosition[];
+  locked: EarnLockedPosition[];
+  errors: Record<string, string>;
+}
+
 export interface LiveAccount {
   fetched_at_utc: string;
   cash: number;
   cash_by_asset: Record<string, number>;
   holdings_value: number;
   equity: number;
+  tradable_equity?: number;
+  earn?: EarnSnapshot;
+  earn_total_usdt?: number;
+  net_worth?: number;
+  wallet_totals?: Array<{ wallet: string; balance_btc: number; active: boolean }>;
   positions: LivePosition[];
   open_orders: LiveOrder[];
   open_orders_error: string;
