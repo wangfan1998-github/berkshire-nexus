@@ -392,3 +392,9 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .alloc-arrow { margin-top: 62px; color: var(--muted); flex-shrink: 0; }
 .alloc-table { flex: 1; min-width: 280px; margin: 0; }
 .alloc-table tbody tr { cursor: pointer; }
+
+/* Fixed-width columns so idea rows line up; the sparkline sits last. */
+.idea-stats { display: grid; grid-template-columns: 64px 68px 132px auto 168px 92px 14px; gap: 14px; align-items: center; justify-items: end; }
+.idea-price, .idea-cost { white-space: nowrap; }
+.donut-side { flex: 1; min-width: 260px; }
+.metric-row.compact > div { padding: 10px 12px; }

@@ -643,6 +643,75 @@ class DesktopService:
         return json_safe(payload)
 
     @staticmethod
+    def _cash_plan(
+        client: BinanceStocksClient,
+        decisions: List[Dict[str, Any]],
+        portfolio,
+    ) -> Dict[str, Any]:
+        """Cash needed by buys versus cash actually spendable now.
+
+        Sells release cash only on fill, so a same-cycle buy cannot rely on them.
+        This states the shortfall explicitly so the operator can redeem savings or
+        deposit, instead of seeing a bare "insufficient cash" rejection.
+        """
+
+        needed = sum(
+            float(item["calculated_notional"])
+            for item in decisions
+            if item["order"]["side"] == "BUY"
+        )
+        pending_sales = sum(
+            float(item["calculated_notional"])
+            for item in decisions
+            if item["order"]["side"] == "SELL" and item.get("approved")
+        )
+        try:
+            card = client.spendable_balance("USDC", "CARD")
+            main = client.spendable_balance("USDC", "MAIN")
+        except (BinanceAPIError, ValueError):
+            card = main = 0.0
+        spendable = card + main
+
+        in_earn = 0.0
+        earn_product = ""
+        try:
+            for row in client.earn_snapshot().get("flexible", []):
+                if row.get("asset") == "USDC":
+                    in_earn += float(row.get("amount", 0.0))
+                    earn_product = str(row.get("product_id", ""))
+        except (BinanceAPIError, ValueError):
+            pass
+
+        shortfall = max(needed - spendable, 0.0)
+        if shortfall <= 0.0:
+            advice = ""
+        elif in_earn >= shortfall:
+            advice = (
+                f"理财中有 {in_earn:.2f} USDC，赎回后即可满足；"
+                "买单扣款钱包是 CARD"
+            )
+        elif pending_sales > 0.0:
+            advice = (
+                f"本轮卖出 {pending_sales:.2f} USDC 需成交后才到账"
+                "（DAY 限价单可能要等下一个交易时段），"
+                f"若要立即买入需补入 {shortfall:.2f} USDC"
+            )
+        else:
+            advice = f"需补入 {shortfall:.2f} USDC，或先卖出并等待成交"
+
+        return {
+            "needed_for_buys": round(needed, 2),
+            "spendable_usdc": round(spendable, 2),
+            "card_usdc": round(card, 2),
+            "main_usdc": round(main, 2),
+            "in_earn_usdc": round(in_earn, 2),
+            "earn_product_id": earn_product,
+            "pending_sale_proceeds": round(pending_sales, 2),
+            "shortfall": round(shortfall, 2),
+            "advice": advice,
+        }
+
+    @staticmethod
     def _allocation_shift(
         portfolio,
         decisions: List[Dict[str, Any]],
@@ -872,6 +941,15 @@ class DesktopService:
         engine = DeterministicRiskEngine(policy)
 
         orders = planner.plan(reports, portfolio, None)
+        dropped = [
+            {
+                "ticker": intent.ticker,
+                "side": intent.side,
+                "notional": round(intent.notional, 2),
+                "reason": reason,
+            }
+            for intent, reason in getattr(planner, "dropped", [])
+        ]
         universe = {}
         try:
             universe = client.tradable_symbols()
@@ -917,6 +995,11 @@ class DesktopService:
             "risk_decisions": decisions,
             "executions": executions,
             "approved_count": sum(1 for item in decisions if item["approved"]),
+            "dropped_orders": dropped,
+            # Buys need spendable USDC in the wallet the order debits. Sells only
+            # release cash once they FILL, which for a DAY limit order may be the
+            # next session — so report the gap rather than let a buy fail opaquely.
+            "cash_plan": self._cash_plan(client, decisions, portfolio),
             # Weights before and after the approved orders, so the UI can show
             # what the rebalance actually changes rather than just a table.
             "allocation": self._allocation_shift(portfolio, decisions, prices),

@@ -45,6 +45,9 @@ class AllocationPlanner:
         portfolio: PortfolioSnapshot,
         champion: Optional[AdaptiveLinearModel] = None,
     ) -> List[OrderIntent]:
+        # Orders the planner itself discarded, with the reason. Surfacing these
+        # matters: a silently missing buy looks like the strategy had no opinion.
+        self.dropped: List[Tuple[OrderIntent, str]] = []
         scored: List[Tuple[ComprehensiveAnalysisReport, float, Optional[float]]] = []
         for report in reports:
             learned_score = champion.predict_score(extract_report_features(report)) if champion else None
@@ -168,16 +171,27 @@ class AllocationPlanner:
             return intents
         budget = equity * self.policy.max_cycle_turnover_pct / 100.0
         kept: List[OrderIntent] = []
-        spent = 0.0
-        # Sells first (they fund buys), then by conviction within each side.
+        sold = 0.0
+        bought = 0.0
+        # Budget each side separately. Sells fund buys, so charging both against
+        # one pot double-counts the same capital: a 693 sell / 693 buy rotation is
+        # 13% of the book, not 26%. Previously the sells consumed the whole budget
+        # and every buy was dropped without explanation.
         for intent in sorted(
             intents,
             key=lambda item: (0 if item.side == "SELL" else 1, -item.combined_score),
         ):
-            if spent + intent.notional > budget:
-                continue
+            if intent.side == "SELL":
+                if sold + intent.notional > budget:
+                    self.dropped.append((intent, "超出本轮卖出换手预算"))
+                    continue
+                sold += intent.notional
+            else:
+                if bought + intent.notional > budget:
+                    self.dropped.append((intent, "超出本轮买入换手预算"))
+                    continue
+                bought += intent.notional
             kept.append(intent)
-            spent += intent.notional
         return sorted(kept, key=lambda item: 0 if item.side == "SELL" else 1)
 
     def _bounded_weights(

@@ -392,6 +392,18 @@ export interface LiveCycleResult {
   risk_decisions: LiveRiskDecision[];
   executions: Execution[];
   approved_count: number;
+  dropped_orders?: Array<{ ticker: string; side: string; notional: number; reason: string }>;
+  cash_plan?: {
+    needed_for_buys: number;
+    spendable_usdc: number;
+    card_usdc: number;
+    main_usdc: number;
+    in_earn_usdc: number;
+    earn_product_id: string;
+    pending_sale_proceeds: number;
+    shortfall: number;
+    advice: string;
+  };
   allocation?: {
     equity: number;
     before: Array<{ ticker: string; value: number; weight_pct: number }>;

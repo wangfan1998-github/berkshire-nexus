@@ -558,48 +558,26 @@ function Dashboard({
       </section>
 
       <section className="ruled-section">
-        <SectionHeading index="01" title="组合构成" note="按市值占比，含现金。" />
-        <div className="donut-row">
-          <Donut rows={donutRows} activeTicker={hovered} onHover={setHovered} title="项持仓" />
-          <table className="data-table numeric-table legend-table">
-            <thead>
-              <tr><th>标的</th><th>占比 %</th><th>市值 (USD)</th><th>收益率 %</th></tr>
-            </thead>
-            <tbody>
-              {donutRows.map((row, index) => (
-                <tr
-                  key={row.ticker}
-                  className={hovered === row.ticker ? "legend-active" : hovered ? "legend-dim" : ""}
-                  onMouseEnter={() => setHovered(row.ticker)}
-                  onMouseLeave={() => setHovered(null)}
-                >
-                  <td>
-                    <i className="legend-dot" style={{ background: sliceColor(row.ticker, index) }} />
-                    <span className="mono">{row.ticker}</span>
-                  </td>
-                  <td>{row.weight_pct.toFixed(2)}</td>
-                  <td>{row.value !== undefined ? plain.format(row.value) : "—"}</td>
-                  <td className={(row.return_pct ?? 0) >= 0 ? "pnl-up" : "pnl-down"}>
-                    {row.ticker === "CASH" || row.return_pct === undefined ? "—" : signed(row.return_pct)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="ruled-section">
         <SectionHeading
-          index="02"
-          title="持仓明细"
-          note="金额单位 USD。成本价由成交记录推导（Binance 无成本价接口）。点击表头可排序。"
+          index="01"
+          title="组合构成与持仓"
+          note="金额单位 USD。成本价由成交记录推导（Binance 无成本价接口）。hover 饼图或表格行可联动高亮，点击表头可排序。"
           action={
             <button className="secondary-button" disabled={blocked(busy, "live-account")} onClick={() => void onRefresh()}>
               {busy === "live-account" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}刷新
             </button>
           }
         />
+        <div className="donut-row">
+          <Donut rows={donutRows} activeTicker={hovered} onHover={setHovered} title="项持仓" />
+          <div className="donut-side">
+            <div className="metric-row compact">
+              <div><span>股票市值</span><strong>{money.format(account.holdings_value)}</strong></div>
+              <div><span>现金</span><strong>{money.format(account.cash)}</strong></div>
+              <div><span>浮动盈亏</span><strong className={unrealised >= 0 ? "pnl-up" : "pnl-down"}>{signed(unrealisedPct)}%</strong></div>
+            </div>
+          </div>
+        </div>
         {account.positions.length === 0 ? (
           <EmptyState title="当前没有股票持仓" body="日报页会给出建仓候选，策略页负责下单。" />
         ) : (
@@ -633,8 +611,14 @@ function Dashboard({
                 const pnl = position.unrealised_pnl ?? 0;
                 const known = (position.average_cost ?? 0) > 0;
                 return (
-                  <tr key={position.ticker}>
+                  <tr
+                    key={position.ticker}
+                    className={hovered === position.ticker ? "legend-active" : hovered ? "legend-dim" : ""}
+                    onMouseEnter={() => setHovered(position.ticker)}
+                    onMouseLeave={() => setHovered(null)}
+                  >
                     <td className="mono">
+                      <i className="legend-dot" style={{ background: sliceColor(position.ticker, donutRows.findIndex((r) => r.ticker === position.ticker)) }} />
                       {position.ticker}
                       {position.tokenized ? <span className="muted"> ·b</span> : null}
                       {position.cost_complete === false ? <span className="muted" title="部分成交早于查询窗口，成本不完整"> *</span> : null}
@@ -800,12 +784,14 @@ function BriefingPage({
                     <div className="idea-stats">
                       <span>分 <strong>{idea.score.toFixed(1)}</strong></span>
                       <span>动量 <strong>{idea.momentum_score.toFixed(1)}</strong></span>
-                      <span>{money.format(idea.price)} <em className={idea.change_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.change_pct)}%</em></span>
-                      <Sparkline points={idea.price_history ?? []} low={idea.fifty_two_week_low} high={idea.fifty_two_week_high} width={96} height={26} />
+                      <span className="idea-price">{money.format(idea.price)} <em className={idea.change_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.change_pct)}%</em></span>
                       {idea.buzz_crowded && <span className="crowded-tag" title={idea.buzz_note}>拥挤</span>}
-                      {idea.held_quantity > 0 ? (
-                        <span>成本 {money.format(idea.average_cost)} <em className={idea.unrealised_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.unrealised_pct, 1)}%</em></span>
-                      ) : <span className="muted">未持仓</span>}
+                      <span className="idea-cost">
+                        {idea.held_quantity > 0 ? (
+                          <>成本 {money.format(idea.average_cost)} <em className={idea.unrealised_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.unrealised_pct, 1)}%</em></>
+                        ) : <span className="muted">未持仓</span>}
+                      </span>
+                      <Sparkline points={idea.price_history ?? []} low={idea.fifty_two_week_low} high={idea.fifty_two_week_high} width={92} height={26} />
                       <ChevronRight size={14} className={expanded === idea.ticker ? "rotated" : ""} />
                     </div>
                   </button>
@@ -1077,6 +1063,26 @@ function StrategyPage({
             <div><span>组合权益（风控分母）</span><strong>{money.format(cycle.equity ?? 0)}</strong></div>
             <div><span>通过风控</span><strong>{cycle.approved_count} / {cycle.risk_decisions.length}</strong></div>
           </div>
+          {cycle.cash_plan && cycle.cash_plan.needed_for_buys > 0 && (
+            <div className={cycle.cash_plan.shortfall > 0 ? "warn-note" : "muted-note"}>
+              <strong>买入资金</strong>：需要 {money.format(cycle.cash_plan.needed_for_buys)}，
+              当前可用 {money.format(cycle.cash_plan.spendable_usdc)} USDC
+              （CARD {money.format(cycle.cash_plan.card_usdc)} · MAIN {money.format(cycle.cash_plan.main_usdc)}）
+              {cycle.cash_plan.in_earn_usdc > 0.01 && `，理财中 ${money.format(cycle.cash_plan.in_earn_usdc)}`}
+              {cycle.cash_plan.shortfall > 0 && (
+                <>
+                  ，<strong>缺口 {money.format(cycle.cash_plan.shortfall)}</strong>
+                  <br />{cycle.cash_plan.advice}
+                </>
+              )}
+            </div>
+          )}
+          {cycle.dropped_orders && cycle.dropped_orders.length > 0 && (
+            <p className="muted-note">
+              因换手预算丢弃 {cycle.dropped_orders.length} 笔：
+              {cycle.dropped_orders.map((row) => `${row.ticker} ${row.side} ${money.format(row.notional)}`).join("、")}
+            </p>
+          )}
           {cycle.unpriced_positions && cycle.unpriced_positions.length > 0 && (
             <p className="warn-note">以下持仓取不到报价，权益被低估，实盘提交已被拒绝：{cycle.unpriced_positions.join("、")}</p>
           )}
