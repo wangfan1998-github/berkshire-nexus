@@ -395,6 +395,57 @@ fn binance_credentials() -> Result<(String, String), String> {
     Ok((key, secret))
 }
 
+/// AI supply-chain daily briefing. Read-only: it never places an order.
+#[tauri::command]
+fn daily_briefing(
+    app: AppHandle,
+    research_config: Value,
+    per_segment: u32,
+    segments: Option<Vec<String>>,
+    minimum_score: f64,
+) -> Result<Value, String> {
+    let (key, secret) = binance_credentials()?;
+    let mut arguments = vec![
+        "briefing".to_string(),
+        "--per-segment".to_string(),
+        per_segment.max(1).to_string(),
+        "--minimum-score".to_string(),
+        minimum_score.to_string(),
+        "--research-config-json".to_string(),
+        serde_json::to_string(&research_config).map_err(|error| error.to_string())?,
+    ];
+    if let Some(values) = segments.filter(|items| !items.is_empty()) {
+        arguments.push("--segments".to_string());
+        arguments.extend(values);
+    }
+    let ai_key = ai_key_for_config(&research_config, false)?;
+    run_json_command_full(
+        &app,
+        &arguments,
+        Some(&key),
+        Some(&secret),
+        ai_key.as_deref(),
+        false,
+    )
+}
+
+#[tauri::command]
+fn screen_market(app: AppHandle, per_segment: u32) -> Result<Value, String> {
+    let (key, secret) = binance_credentials()?;
+    run_json_command_full(
+        &app,
+        &[
+            "screen".to_string(),
+            "--per-segment".to_string(),
+            per_segment.max(1).to_string(),
+        ],
+        Some(&key),
+        Some(&secret),
+        None,
+        false,
+    )
+}
+
 #[tauri::command]
 fn live_account(app: AppHandle) -> Result<Value, String> {
     let (key, secret) = binance_credentials()?;
@@ -694,6 +745,8 @@ pub fn run() {
             binance_secret_status,
             verify_binance_credentials,
             live_account,
+            daily_briefing,
+            screen_market,
             live_reconcile,
             live_accept_disclaimer,
             live_cancel_all,

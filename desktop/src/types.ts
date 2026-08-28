@@ -1,14 +1,4 @@
-export type PageId =
-  | "overview"
-  | "research"
-  | "ai"
-  | "portfolio"
-  | "live"
-  | "agent"
-  | "models"
-  | "risk"
-  | "audit"
-  | "settings";
+export type PageId = "dashboard" | "briefing" | "strategy" | "settings";
 
 export interface Holding {
   ticker: string;
@@ -64,10 +54,10 @@ export interface RiskConfig {
   allowed_symbols: string[];
 }
 
-export type AIProvider = "openai-compatible" | "ollama" | "codex-cli";
+export type AIProvider = "openai-compatible" | "gemini" | "ollama" | "codex-cli";
 
 export interface ResearchConfig {
-  market_provider: "yahoo-nasdaq";
+  market_provider: string;
   news_enabled: boolean;
   news_provider: "yahoo" | "yahoo-google";
   max_news_items: number;
@@ -252,6 +242,15 @@ export const LIVE_ACKNOWLEDGEMENT = "I_ACKNOWLEDGE_REAL_MONEY";
 
 export interface LivePosition {
   ticker: string;
+  average_cost?: number;
+  cost_value?: number;
+  unrealised_pnl?: number;
+  return_pct?: number;
+  realised_pnl?: number;
+  fees_paid?: number;
+  trade_count?: number;
+  cost_complete?: boolean;
+  cost_covered_quantity?: number;
   wallet_assets?: string[];
   tokenized?: boolean;
   multiplier?: number;
@@ -330,6 +329,10 @@ export interface LiveAccount {
   earn?: EarnSnapshot;
   earn_total_usdt?: number;
   net_worth?: number;
+  total_cost?: number;
+  unrealised_pnl?: number;
+  unrealised_pnl_pct?: number;
+  realised_pnl?: number;
   wallet_totals?: Array<{ wallet: string; balance_btc: number; active: boolean }>;
   positions: LivePosition[];
   open_orders: LiveOrder[];
@@ -389,4 +392,108 @@ export interface LiveCycleResult {
   risk_decisions: LiveRiskDecision[];
   executions: Execution[];
   approved_count: number;
+}
+
+
+/** ---- Daily briefing (AI supply chain) ---- */
+
+export interface BriefingNews {
+  evidence_id: string;
+  title: string;
+  publisher: string;
+  url: string;
+}
+
+export type BriefingAction = "ADD" | "HOLD" | "TRIM" | "AVOID";
+
+export interface BriefingIdea {
+  ticker: string;
+  name: string;
+  segment: string;
+  segment_label: string;
+  action: BriefingAction;
+  score: number;
+  recommendation: string;
+  price: number;
+  change_pct: number;
+  momentum_score: number;
+  momentum_notes: string[];
+  margin_of_safety_pct: number;
+  chokepoint_level: number;
+  position_cap_pct: number;
+  held_quantity: number;
+  average_cost: number;
+  unrealised_pct: number;
+  weight_pct: number;
+  reasons: string[];
+  news: BriefingNews[];
+  ai_summary: string;
+  ai_action_bias: string;
+  ai_confidence: number;
+  ai_citations: string[];
+}
+
+export interface BriefingSegment {
+  segment: string;
+  label: string;
+  role: string;
+  candidate_count: number;
+  analysed: string[];
+  average_score: number;
+  average_change_pct: number;
+  best_ticker: string;
+  best_score: number;
+}
+
+export interface DailyBriefing {
+  generated_at_utc: string;
+  trading_date: string;
+  segments: BriefingSegment[];
+  ideas: BriefingIdea[];
+  portfolio: {
+    equity: number;
+    holdings_value: number;
+    total_cost: number;
+    unrealised_pnl: number;
+    unrealised_pnl_pct: number;
+    realised_pnl: number;
+    earn_total_usdt: number;
+    net_worth: number;
+    position_count: number;
+  };
+  market_note: string;
+  ai_status: "ok" | "disabled" | "error" | string;
+  ai_error: string;
+  screened: {
+    total_listings: number;
+    tradable_listings: number;
+    shortlist_size: number;
+  };
+  reports?: AnalysisReport[];
+}
+
+export interface ScreenedStock {
+  ticker: string;
+  name: string;
+  segment: string;
+  segment_label: string;
+  industry: string;
+  sector: string;
+  market_cap: number;
+  last_sale: number;
+  volume: number;
+  change_pct: number;
+  dollar_volume: number;
+  liquidity_rank: number;
+}
+
+export interface ScreenResult {
+  generated_at_utc: string;
+  total_listings: number;
+  tradable_listings: number;
+  segments: Record<string, ScreenedStock[]>;
+  shortlist: ScreenedStock[];
+  held_tickers: string[];
+  segment_catalogue: Array<{ id: string; label: string; role: string; industries: string[] }>;
+  errors: Record<string, string>;
 }

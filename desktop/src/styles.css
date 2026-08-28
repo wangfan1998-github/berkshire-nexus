@@ -56,9 +56,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sidebar nav button:hover { color: #eef0e9; background: #1e2e25; transform: translateX(2px); }
 .sidebar nav button.active { color: #f7f6f0; background: #213228; }
 .sidebar nav button svg { justify-self: center; }
-.sidebar nav button > span { display: flex; flex-direction: column; gap: 1px; }
+.sidebar nav button > span,
+.sidebar nav button > div { display: flex; flex-direction: column; gap: 1px; }
 .sidebar nav button strong { font-size: 13px; font-weight: 600; }
-.sidebar nav button small { color: #7f8c83; font-size: 9px; letter-spacing: .03em; }
+.sidebar nav button small,
+.sidebar nav button > div > span { color: #7f8c83; font-size: 9px; letter-spacing: .03em; }
 .sidebar nav button > i { width: 3px; height: 25px; border-radius: 4px; background: #6d9878; }
 .sidebar-footer { margin-top: auto; padding: 14px 6px 0; border-top: 1px solid #2a392f; }
 .agent-mini-status { display: flex; gap: 9px; align-items: center; }
@@ -279,3 +281,51 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .analysis-body li { margin-bottom: 4px; }
 .analysis-body a { color: var(--green-dark); }
 .metric-row small { font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+/* ── v2 shell: dashboard / briefing / strategy ──────────────────────── */
+.pnl-up { color: var(--green-dark); }
+.pnl-down { color: var(--risk); }
+
+.market-note { margin: 6px 0 14px; padding: 12px 14px; font-size: 11px; line-height: 1.75; background: var(--green-soft); border-left: 2px solid var(--green); }
+
+.idea-list { display: flex; flex-direction: column; gap: 1px; margin-top: 12px; background: var(--line); border: 1px solid var(--line); }
+.idea-card { background: var(--paper); }
+.idea-card.action-add { border-left: 2px solid var(--green); }
+.idea-card.action-trim { border-left: 2px solid var(--amber); }
+.idea-card.action-avoid { border-left: 2px solid var(--risk); }
+.idea-card.action-hold { border-left: 2px solid var(--line-dark); }
+
+.idea-head { display: flex; gap: 16px; align-items: center; justify-content: space-between; width: 100%; padding: 13px 16px; text-align: left; background: none; border: 0; cursor: pointer; }
+.idea-head:hover { background: var(--paper-deep); }
+.idea-title { display: flex; gap: 10px; align-items: center; font-size: 12px; }
+.idea-title strong { font-size: 13px; }
+.idea-stats { display: flex; gap: 18px; align-items: center; font-size: 10px; color: var(--muted); white-space: nowrap; }
+.idea-stats strong { color: var(--ink); font-family: var(--mono); }
+.idea-stats em { font-style: normal; font-family: var(--mono); }
+.idea-stats .rotated { transform: rotate(90deg); }
+
+.idea-body { padding: 2px 16px 16px; font-size: 10px; line-height: 1.75; border-top: 1px dashed var(--line); }
+.idea-body p { margin: 10px 0 6px; }
+.idea-body strong { font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; }
+.idea-body ul { margin: 0 0 8px; padding-left: 16px; color: var(--muted); }
+.idea-body li { margin-bottom: 4px; }
+.idea-body a { color: var(--green-dark); }
+
+.risk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin-top: 8px; }
+.risk-grid .field-label { margin: 0; }
+.risk-grid small { display: block; margin-top: 4px; font-size: 9px; }
+
+.checkbox-row { display: flex; gap: 9px; align-items: center; margin-top: 14px; font-size: 10px; cursor: pointer; }
+.checkbox-row input { width: 14px; height: 14px; }
+
+.sidebar-status { display: flex; gap: 10px; align-items: center; padding: 11px 12px; margin-bottom: 10px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); }
+.sidebar-status > span { width: 7px; height: 7px; border-radius: 50%; background: #8d9490; flex-shrink: 0; }
+.sidebar-status.live > span { background: #6fd39a; }
+.sidebar-status div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sidebar-status strong { font-size: 10px; color: #f2efe6; }
+.sidebar-status span:last-child { font-size: 9px; color: #9aa19a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 1000px) {
+  .idea-head { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .idea-stats { flex-wrap: wrap; gap: 12px; }
+}

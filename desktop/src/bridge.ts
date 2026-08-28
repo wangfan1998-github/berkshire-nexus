@@ -6,8 +6,10 @@ import type {
   AppSnapshot,
   CredentialCheck,
   DesktopSettings,
+  DailyBriefing,
   LiveAccount,
   LiveCycleResult,
+  ScreenResult,
   LiveReconciliation,
 } from "./types";
 
@@ -162,6 +164,28 @@ export const desktopBridge = {
     if (isTauri) return invoke<CredentialCheck>("verify_binance_credentials");
     await wait(600);
     throw new Error("浏览器预览无法访问系统钥匙串；请在 Tauri 桌面 App 中自检。");
+  },
+
+  async dailyBriefing(
+    settings: DesktopSettings,
+    options?: { perSegment?: number; segments?: string[]; minimumScore?: number },
+  ): Promise<DailyBriefing> {
+    if (isTauri) {
+      return invoke<DailyBriefing>("daily_briefing", {
+        researchConfig: settings.research,
+        perSegment: options?.perSegment ?? 3,
+        segments: options?.segments ?? null,
+        minimumScore: options?.minimumScore ?? 60,
+      });
+    }
+    await wait(900);
+    throw new Error("浏览器预览无法访问系统钥匙串；请在 Tauri 桌面 App 中生成日报。");
+  },
+
+  async screenMarket(perSegment = 6): Promise<ScreenResult> {
+    if (isTauri) return invoke<ScreenResult>("screen_market", { perSegment });
+    await wait(700);
+    throw new Error("浏览器预览无法选股；请在 Tauri 桌面 App 中运行。");
   },
 
   async liveAccount(): Promise<LiveAccount> {
