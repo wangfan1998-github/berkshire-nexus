@@ -338,3 +338,6 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 
 .sort-header { display: inline-flex; gap: 3px; align-items: center; padding: 0; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; background: none; border: 0; cursor: pointer; }
 .sort-header:hover { color: var(--ink); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; }
+
+/* Crowding tag: social attention is a warning, so it reads as a caution. */
+.crowded-tag { padding: 1px 6px; color: var(--amber); font-size: 9px; font-weight: 600; background: var(--amber-soft); border-radius: 2px; }

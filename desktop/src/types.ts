@@ -431,6 +431,16 @@ export interface BriefingIdea {
   ai_action_bias: string;
   ai_confidence: number;
   ai_citations: string[];
+  buzz_rank: number;
+  buzz_mentions: number;
+  buzz_delta: number;
+  buzz_surge_ratio: number;
+  buzz_crowded: boolean;
+  buzz_note: string;
+  news_score: number;
+  news_label: string;
+  news_article_count: number;
+  news_available: boolean;
 }
 
 export interface BriefingSegment {
@@ -469,6 +479,8 @@ export interface DailyBriefing {
     tradable_listings: number;
     shortlist_size: number;
   };
+  attention_errors?: Record<string, string>;
+  buzz_universe_size?: number;
   reports?: AnalysisReport[];
 }
 

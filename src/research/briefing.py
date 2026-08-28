@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..core.orchestrator import ComprehensiveAnalysisReport
+from ..data.attention import AttentionResult, BuzzEntry, NewsSentiment, crowding_note
 
 
 @dataclass
@@ -63,6 +64,18 @@ class BriefingIdea:
     ai_action_bias: str = ""
     ai_confidence: float = 0.0
     ai_citations: List[str] = field(default_factory=list)
+    # Social attention and news sentiment. Reported as context and a crowding
+    # warning; never used to justify an entry on their own.
+    buzz_rank: int = 0
+    buzz_mentions: int = 0
+    buzz_delta: int = 0
+    buzz_surge_ratio: float = 0.0
+    buzz_crowded: bool = False
+    buzz_note: str = ""
+    news_score: float = 0.0
+    news_label: str = ""
+    news_article_count: int = 0
+    news_available: bool = False
 
 
 @dataclass
@@ -76,6 +89,8 @@ class DailyBriefing:
     ai_status: str = "disabled"
     ai_error: str = ""
     screened: Dict[str, Any] = field(default_factory=dict)
+    attention_errors: Dict[str, str] = field(default_factory=dict)
+    buzz_universe_size: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -88,6 +103,8 @@ class DailyBriefing:
             "ai_status": self.ai_status,
             "ai_error": self.ai_error,
             "screened": self.screened,
+            "attention_errors": self.attention_errors,
+            "buzz_universe_size": self.buzz_universe_size,
         }
 
 
@@ -110,6 +127,7 @@ def classify_action(
     held_quantity: float,
     weight_pct: float,
     minimum_score: float = 60.0,
+    buzz: Optional[BuzzEntry] = None,
 ) -> tuple:
     """Decide ADD / HOLD / TRIM / AVOID and state why.
 
@@ -139,7 +157,7 @@ def classify_action(
         if held and weight_pct > cap + 0.05:
             reasons.append(f"当前仓位 {weight_pct:.2f}% 超过 ETF 上限 {cap:.0f}%")
             return "TRIM", reasons
-        chase = _chase_reason(report)
+        chase = _chase_reason(report, buzz)
         if chase:
             reasons.append(chase)
             return ("HOLD" if held else "AVOID"), reasons
@@ -162,7 +180,7 @@ def classify_action(
         return "HOLD", reasons
 
     # Hard chase gate, evaluated before any ADD is allowed.
-    chase = _chase_reason(report)
+    chase = _chase_reason(report, buzz)
     if chase:
         reasons.append(chase)
         return ("HOLD" if held else "AVOID"), reasons
@@ -191,7 +209,10 @@ def classify_action(
     return "ADD", reasons
 
 
-def _chase_reason(report: ComprehensiveAnalysisReport) -> str:
+def _chase_reason(
+    report: ComprehensiveAnalysisReport,
+    buzz: Optional[BuzzEntry] = None,
+) -> str:
     """Return why this is a chase, or an empty string when entry timing is fine.
 
     Deliberately independent of the composite score: "it already ran today" is a
@@ -211,6 +232,15 @@ def _chase_reason(report: ComprehensiveAnalysisReport) -> str:
         position = (price - low) / (high - low) * 100.0
         if position >= CHASE_RANGE_PCT:
             return f"处于52周区间 {position:.0f}% 分位，上行空间已被大量定价"
+
+    # Crowding: top-10 on Reddit AND still accelerating. Treated as a reason to
+    # wait, never as confirmation — the one rigorous audit of finance-influencer
+    # calls found 45% directional accuracy across ~18k predictions.
+    if buzz is not None and buzz.is_crowded:
+        return (
+            f"社交热度第 {buzz.rank} 位且提及量放大 {buzz.surge_ratio:.1f}x，"
+            "属于拥挤交易，等热度消退再看"
+        )
     return ""
 
 
@@ -248,6 +278,8 @@ BRIEFING_PROMPT = """基于以下证据，为今日 AI 产业链埋伏给出结�
 规则：
 - 只讨论上面列出的标的，不要引入其他公司。
 - 已持仓的标的必须结合成本价和浮动盈亏来判断加仓还是减仓。
+- social_* 字段是 Reddit 关注度，只能当拥挤度/情绪指标；社交热度高不构成买入理由，
+  反而要提示接盘风险（对 51 个财经大V 约 1.8 万条预测的审计显示方向准确率仅 45%）。
 - 证据不足就直说，conviction 用 low。
 - citations 只能引用上面出现过的 evidence_id，不得编造。
 """
@@ -266,6 +298,7 @@ class BriefingComposer:
         screened: Dict[str, Any],
         account: Optional[Dict[str, Any]] = None,
         minimum_score: float = 60.0,
+        attention: Optional[AttentionResult] = None,
     ) -> DailyBriefing:
         account = account or {}
         positions = {
@@ -320,11 +353,14 @@ class BriefingComposer:
             position = positions.get(ticker, {})
             held = float(position.get("quantity", 0.0))
             weight = float(position.get("weight_pct", 0.0))
+            buzz = (attention.buzz.get(ticker) if attention else None)
+            news = (attention.sentiment.get(ticker) if attention else None)
             action, reasons = classify_action(
                 report,
                 held_quantity=held,
                 weight_pct=weight,
                 minimum_score=minimum_score,
+                buzz=buzz,
             )
             news_items = [
                 {
@@ -356,6 +392,16 @@ class BriefingComposer:
                 weight_pct=weight,
                 reasons=reasons,
                 news=news_items,
+                buzz_rank=(buzz.rank if buzz else 0),
+                buzz_mentions=(buzz.mentions if buzz else 0),
+                buzz_delta=(buzz.mention_delta if buzz else 0),
+                buzz_surge_ratio=(round(buzz.surge_ratio, 2) if buzz else 0.0),
+                buzz_crowded=(buzz.is_crowded if buzz else False),
+                buzz_note=crowding_note(buzz),
+                news_score=(news.score if news else 0.0),
+                news_label=(news.label if news else ""),
+                news_article_count=(news.article_count if news else 0),
+                news_available=(bool(news and news.available)),
             ))
 
         # Rank actionable ideas first, then by score.
@@ -373,6 +419,9 @@ class BriefingComposer:
             "net_worth": account.get("net_worth", 0.0),
             "position_count": len(positions),
         }
+        if attention is not None:
+            briefing.attention_errors = dict(attention.errors)
+            briefing.buzz_universe_size = attention.buzz_universe_size
         self._attach_ai(briefing)
         return briefing
 
@@ -405,6 +454,12 @@ class BriefingComposer:
                     "unrealised_pct": idea.unrealised_pct,
                     "reasons": idea.reasons,
                     "news": idea.news,
+                    "social_rank": idea.buzz_rank,
+                    "social_mentions": idea.buzz_mentions,
+                    "social_surge_ratio": idea.buzz_surge_ratio,
+                    "social_crowded": idea.buzz_crowded,
+                    "news_sentiment_score": idea.news_score,
+                    "news_sentiment_label": idea.news_label,
                 }
                 for idea in briefing.ideas
             ],

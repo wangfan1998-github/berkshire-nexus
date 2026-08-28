@@ -182,6 +182,24 @@ export const desktopBridge = {
     throw new Error("浏览器预览无法访问系统钥匙串；请在 Tauri 桌面 App 中生成日报。");
   },
 
+  async alphaVantageKeyStatus(): Promise<boolean> {
+    if (isTauri) {
+      const value = await invoke<{ configured: boolean }>("alphavantage_key_status");
+      return value.configured;
+    }
+    return false;
+  },
+
+  async saveAlphaVantageKey(apiKey: string): Promise<void> {
+    if (isTauri) await invoke("save_alphavantage_key", { apiKey });
+    else await wait();
+  },
+
+  async deleteAlphaVantageKey(): Promise<void> {
+    if (isTauri) await invoke("delete_alphavantage_key");
+    else await wait();
+  },
+
   async screenMarket(perSegment = 6): Promise<ScreenResult> {
     if (isTauri) return invoke<ScreenResult>("screen_market", { perSegment });
     await wait(700);

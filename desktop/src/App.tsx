@@ -55,6 +55,7 @@ type BusyAction =
   | "save"
   | "key"
   | "ai-key"
+  | "alpha-key"
   | "ai-test"
   | "preflight"
   | "promote"
@@ -519,6 +520,7 @@ function BriefingPage({
                       <span>分 <strong>{idea.score.toFixed(1)}</strong></span>
                       <span>动量 <strong>{idea.momentum_score.toFixed(1)}</strong></span>
                       <span>{money.format(idea.price)} <em className={idea.change_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.change_pct)}%</em></span>
+                      {idea.buzz_crowded && <span className="crowded-tag" title={idea.buzz_note}>拥挤</span>}
                       {idea.held_quantity > 0 ? (
                         <span>成本 {money.format(idea.average_cost)} <em className={idea.unrealised_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.unrealised_pct, 1)}%</em></span>
                       ) : <span className="muted">未持仓</span>}
@@ -542,6 +544,21 @@ function BriefingPage({
                           {idea.ai_citations.length > 0 && (
                             <p className="muted">引用证据：{idea.ai_citations.join("、")}</p>
                           )}
+                        </>
+                      )}
+                      {(idea.buzz_note || idea.news_available) && (
+                        <>
+                          <p><strong>关注度与情绪</strong></p>
+                          <ul>
+                            {idea.buzz_note && <li>{idea.buzz_note}</li>}
+                            {idea.news_available && (
+                              <li>
+                                新闻情绪 {idea.news_label}（{idea.news_score >= 0 ? "+" : ""}{idea.news_score.toFixed(3)}），
+                                共 {idea.news_article_count} 篇
+                              </li>
+                            )}
+                          </ul>
+                          <p className="muted">社交热度仅作拥挤度参考，不构成买入理由。</p>
                         </>
                       )}
                       {idea.news.length > 0 && (
@@ -766,6 +783,7 @@ function SettingsPage({
   keyConfigured,
   secretConfigured,
   aiConfigured,
+  alphaConfigured,
   check,
   busy,
   onSettings,
@@ -776,6 +794,8 @@ function SettingsPage({
   onDeleteSecret,
   onSaveAIKey,
   onDeleteAIKey,
+  onSaveAlphaKey,
+  onDeleteAlphaKey,
   onVerify,
   onTestAI,
   onAcceptDisclaimer,
@@ -784,6 +804,7 @@ function SettingsPage({
   keyConfigured: boolean;
   secretConfigured: boolean;
   aiConfigured: boolean;
+  alphaConfigured: boolean;
   check: CredentialCheck | null;
   busy: BusyAction;
   onSettings: (next: DesktopSettings) => void;
@@ -794,6 +815,8 @@ function SettingsPage({
   onDeleteSecret: () => Promise<void>;
   onSaveAIKey: (value: string) => Promise<void>;
   onDeleteAIKey: () => Promise<void>;
+  onSaveAlphaKey: (value: string) => Promise<void>;
+  onDeleteAlphaKey: () => Promise<void>;
   onVerify: () => Promise<void>;
   onTestAI: () => Promise<void>;
   onAcceptDisclaimer: () => Promise<void>;
@@ -801,6 +824,7 @@ function SettingsPage({
   const [key, setKey] = useState("");
   const [secret, setSecret] = useState("");
   const [aiKey, setAIKey] = useState("");
+  const [avKey, setAVKey] = useState("");
   const research = settings.research;
   const preset = research.ai_provider === "gemini" ? AI_PRESETS.gemini : AI_PRESETS.gateway;
 
@@ -929,6 +953,23 @@ function SettingsPage({
             <input type="checkbox" checked={research.ai_enabled} onChange={(event) => onSettings({ ...settings, research: { ...research, ai_enabled: event.target.checked } })} />
             <span>启用 AI 综合</span>
           </label>
+
+          <SectionHeading index="03" title="情绪数据源" note="Reddit 关注度免费无需 Key；新闻情绪需要 Alpha Vantage 免费 Key（25 次/天）。" />
+          <label className="field-label">
+            <span>ALPHAVANTAGE_API_KEY（可选）</span>
+            <div className="secret-input">
+              <KeyRound size={16} />
+              <input type="password" value={avKey} onChange={(event) => setAVKey(event.target.value)} placeholder={alphaConfigured ? "输入新 Key 可替换" : "粘贴免费 Key"} autoComplete="off" spellCheck={false} />
+            </div>
+          </label>
+          <div className="button-row">
+            <button className="primary-button" disabled={busy !== null || avKey.trim().length < 8} onClick={() => void onSaveAlphaKey(avKey).then(() => setAVKey("")).catch(() => undefined)}>
+              {busy === "alpha-key" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}存 Key
+            </button>
+            {alphaConfigured && <button className="danger-text-button" disabled={busy !== null} onClick={() => void onDeleteAlphaKey()}><Trash2 size={15} />删除</button>}
+            <a className="external-link" href="https://www.alphavantage.co/support/#api-key" target="_blank" rel="noreferrer">领取免费 Key <ArrowUpRight size={13} /></a>
+          </div>
+          <p className="muted-note">未配置时日报仍可用，只是没有新闻情绪分；Reddit 关注度不受影响。</p>
         </section>
       </div>
 
@@ -979,6 +1020,7 @@ export default function App() {
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [secretConfigured, setSecretConfigured] = useState(false);
   const [aiKeyConfigured, setAIKeyConfigured] = useState(false);
+  const [alphaKeyConfigured, setAlphaKeyConfigured] = useState(false);
   const [busy, setBusy] = useState<BusyAction>("boot");
   const [toast, setToast] = useState<Toast | null>(null);
 
@@ -1013,17 +1055,19 @@ export default function App() {
     let alive = true;
     const boot = async () => {
       try {
-        const [nextSettings, hasKey, hasSecret, hasAI] = await Promise.all([
+        const [nextSettings, hasKey, hasSecret, hasAI, hasAlpha] = await Promise.all([
           desktopBridge.loadSettings(),
           desktopBridge.keyStatus(),
           desktopBridge.secretStatus(),
           desktopBridge.aiKeyStatus(),
+          desktopBridge.alphaVantageKeyStatus(),
         ]);
         if (!alive) return;
         setSettings(nextSettings);
         setKeyConfigured(hasKey);
         setSecretConfigured(hasSecret);
         setAIKeyConfigured(hasAI);
+        setAlphaKeyConfigured(hasAlpha);
         if (hasKey && hasSecret) await loadAccount(true);
       } catch (error) {
         if (alive) notify("error", `初始化失败：${asError(error)}`);
@@ -1187,6 +1231,7 @@ export default function App() {
             keyConfigured={keyConfigured}
             secretConfigured={secretConfigured}
             aiConfigured={aiKeyConfigured}
+            alphaConfigured={alphaKeyConfigured}
             check={credentialCheck}
             busy={busy}
             onSettings={setSettings}
@@ -1197,6 +1242,8 @@ export default function App() {
             onDeleteSecret={async () => { setBusy("secret"); try { await desktopBridge.deleteSecret(); setSecretConfigured(false); setAccount(null); notify("success", "Secret 已删除"); } catch (error) { notify("error", asError(error)); } finally { setBusy(null); } }}
             onSaveAIKey={async (value) => { setBusy("ai-key"); try { await desktopBridge.saveAIKey(value); setAIKeyConfigured(true); notify("success", "AI Token 已存入钥匙串"); } catch (error) { notify("error", asError(error)); throw error; } finally { setBusy(null); } }}
             onDeleteAIKey={async () => { setBusy("ai-key"); try { await desktopBridge.deleteAIKey(); setAIKeyConfigured(false); notify("success", "AI Token 已删除"); } catch (error) { notify("error", asError(error)); } finally { setBusy(null); } }}
+            onSaveAlphaKey={async (value) => { setBusy("alpha-key"); try { await desktopBridge.saveAlphaVantageKey(value); setAlphaKeyConfigured(true); notify("success", "Alpha Vantage Key 已存入钥匙串"); } catch (error) { notify("error", asError(error)); throw error; } finally { setBusy(null); } }}
+            onDeleteAlphaKey={async () => { setBusy("alpha-key"); try { await desktopBridge.deleteAlphaVantageKey(); setAlphaKeyConfigured(false); notify("success", "Alpha Vantage Key 已删除"); } catch (error) { notify("error", asError(error)); } finally { setBusy(null); } }}
             onVerify={verify}
             onTestAI={testAI}
             onAcceptDisclaimer={acceptDisclaimer}
@@ -1204,7 +1251,7 @@ export default function App() {
         );
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, account, briefing, cycle, settings, busy, ready, keyConfigured, secretConfigured, aiKeyConfigured, credentialCheck]);
+  }, [page, account, briefing, cycle, settings, busy, ready, keyConfigured, secretConfigured, aiKeyConfigured, alphaKeyConfigured, credentialCheck]);
 
   return (
     <div className="app-shell">

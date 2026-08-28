@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 from ..agent.cycle import PaperTradingAgent
 from ..core.orchestrator import ComprehensiveAnalysisReport, OmniAlphaOrchestrator
 from ..learning.registry import ChampionChallengerRegistry
+from ..data.attention import AttentionService
 from ..data.screener import MarketScreener, segment_catalogue
 from ..research.briefing import BriefingComposer
 from ..research.ai import AIResearchService
@@ -550,12 +551,20 @@ class DesktopService:
             except (BinanceAPIError, ValueError):
                 account = {}
 
+        # Social attention + news sentiment. Free sources; failures degrade the
+        # briefing rather than failing it.
+        attention = AttentionService(
+            alpha_vantage_key=os.environ.get("ALPHAVANTAGE_API_KEY", ""),
+            cache_dir=self.state_directory,
+        ).collect(tickers, include_news=True)
+
         ai_service = AIResearchService(config, ai_api_key) if config.ai_enabled else None
         briefing = BriefingComposer(ai_service).compose(
             reports=reports,
             screened=screened,
             account=account,
             minimum_score=minimum_score,
+            attention=attention,
         )
         payload = briefing.to_dict()
         payload["reports"] = [self._report(report) for report in reports]
