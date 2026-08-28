@@ -408,3 +408,47 @@ cp SKILL.md ~/.claude/skills/berkshire-nexus/
 ## 📜 免责声明 (Disclaimer)
 
 *本项目（BerkshireNexus）仅供学术研究、AI 投资方法论探索及量化代码交流使用。本系统输出的任何分数、估值结果、大师辩论意见和持仓上限建议均不构成任何实质性的投资建议或证券买卖要约。模拟结果不代表未来表现；自动学习也不能消除模型风险、数据偏差、滑点、流动性或监管风险。金融市场有风险，投资需独立思考与严谨决策。*
+
+### 本机签名（避免钥匙串反复弹窗）
+
+Tauri 默认 ad-hoc 签名，**每次构建签名身份都不同**，macOS 因此把每次重建当作全新程序，
+之前授予的钥匙串访问权限全部作废 —— 表现就是每次更新 app 都要重新授权好几次。
+
+`tauri.conf.json` 已配置 `bundle.macOS.signingIdentity = "BerkshireNexus Local Signing"`。
+换机器或重装系统后需要重新创建这个自签名证书：
+
+```bash
+# 1. 生成证书
+cat > /tmp/bn-cert.cnf <<'CNF'
+[ req ]
+default_md = sha256
+prompt = no
+distinguished_name = dn
+x509_extensions = v3
+[ dn ]
+CN = BerkshireNexus Local Signing
+[ v3 ]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+subjectKeyIdentifier = hash
+CNF
+openssl req -new -x509 -newkey rsa:2048 -nodes -days 3650 \
+  -config /tmp/bn-cert.cnf -keyout /tmp/bn-key.pem -out /tmp/bn-cert.pem
+openssl pkcs12 -export -inkey /tmp/bn-key.pem -in /tmp/bn-cert.pem \
+  -name "BerkshireNexus Local Signing" -out /tmp/bn.p12 -passout pass:bnlocal
+
+# 2. 导入登录钥匙串
+security import /tmp/bn.p12 -k ~/Library/Keychains/login.keychain-db \
+  -P bnlocal -T /usr/bin/codesign -T /usr/bin/security
+
+# 3. 设为受信任（需要输入登录密码）
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain /tmp/bn-cert.pem
+
+# 4. 确认可用
+security find-identity -v -p codesigning   # 应列出 BerkshireNexus Local Signing
+rm -f /tmp/bn-key.pem /tmp/bn.p12          # 私钥已在钥匙串，删掉临时文件
+```
+
+这是**自签名**证书，只解决本机重复授权问题；对外分发仍需 Apple Developer ID 签名与公证。
