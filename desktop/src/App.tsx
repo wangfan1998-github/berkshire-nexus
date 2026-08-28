@@ -84,6 +84,14 @@ const compactMoney = new Intl.NumberFormat("zh-CN", {
 
 const number = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 });
 
+/** Bare 2-dp number. Currency lives in the column header, not every cell. */
+const plain = new Intl.NumberFormat("zh-CN", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+type SortKey = "unrealised_pnl" | "weight_pct" | "return_pct" | null;
+
 function formatDate(value?: string | null, includeTime = true) {
   if (!value) return "—";
   const date = new Date(value);
@@ -241,6 +249,9 @@ function Dashboard({
   onRefresh: () => Promise<void>;
   goTo: (page: PageId) => void;
 }) {
+  const [sortKey, setSortKey] = useState<SortKey>(null);
+  const [sortDesc, setSortDesc] = useState(true);
+
   if (!account) {
     return (
       <div className="page-stack">
@@ -269,6 +280,27 @@ function Dashboard({
   const unrealisedPct = account.unrealised_pnl_pct ?? 0;
   const incomplete = account.positions.filter((item) => item.cost_complete === false);
 
+  const sorted = [...account.positions].sort((a, b) => {
+    if (!sortKey) return a.ticker.localeCompare(b.ticker);
+    const left = Number(a[sortKey] ?? 0);
+    const right = Number(b[sortKey] ?? 0);
+    return sortDesc ? right - left : left - right;
+  });
+
+  const toggleSort = (key: Exclude<SortKey, null>) => {
+    if (sortKey === key) {
+      // third click clears back to alphabetical
+      if (sortDesc) setSortDesc(false);
+      else { setSortKey(null); setSortDesc(true); }
+    } else {
+      setSortKey(key);
+      setSortDesc(true);
+    }
+  };
+
+  const arrow = (key: Exclude<SortKey, null>) =>
+    sortKey === key ? (sortDesc ? " ↓" : " ↑") : "";
+
   return (
     <div className="page-stack">
       <section className="overview-strip" aria-label="账户概览">
@@ -287,7 +319,7 @@ function Dashboard({
         <SectionHeading
           index="01"
           title="持仓明细"
-          note="成本价由成交记录推导（Binance 无成本价接口）。"
+          note="金额单位 USD。成本价由成交记录推导（Binance 无成本价接口）。点击表头可排序。"
           action={
             <button className="secondary-button" disabled={busy !== null} onClick={() => void onRefresh()}>
               {busy === "live-account" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}刷新
@@ -297,16 +329,35 @@ function Dashboard({
         {account.positions.length === 0 ? (
           <EmptyState title="当前没有股票持仓" body="日报页会给出建仓候选，策略页负责下单。" />
         ) : (
-          <table className="data-table">
+          <table className="data-table numeric-table">
             <thead>
               <tr>
-                <th>标的</th><th>数量</th><th>成本价</th><th>现价</th>
-                <th>市值</th><th>浮动盈亏</th><th>收益率</th><th>占比</th>
+                <th>标的</th>
+                <th>数量</th>
+                <th>成本价 (USD)</th>
+                <th>现价 (USD)</th>
+                <th>市值 (USD)</th>
+                <th>
+                  <button className="sort-header" onClick={() => toggleSort("unrealised_pnl")}>
+                    浮动盈亏 (USD){arrow("unrealised_pnl")}
+                  </button>
+                </th>
+                <th>
+                  <button className="sort-header" onClick={() => toggleSort("return_pct")}>
+                    收益率 %{arrow("return_pct")}
+                  </button>
+                </th>
+                <th>
+                  <button className="sort-header" onClick={() => toggleSort("weight_pct")}>
+                    占比 %{arrow("weight_pct")}
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody>
-              {account.positions.map((position) => {
+              {sorted.map((position) => {
                 const pnl = position.unrealised_pnl ?? 0;
+                const known = (position.average_cost ?? 0) > 0;
                 return (
                   <tr key={position.ticker}>
                     <td className="mono">
@@ -315,16 +366,16 @@ function Dashboard({
                       {position.cost_complete === false ? <span className="muted" title="部分成交早于查询窗口，成本不完整"> *</span> : null}
                     </td>
                     <td>{position.quantity.toFixed(4)}</td>
-                    <td>{position.average_cost ? money.format(position.average_cost) : "—"}</td>
-                    <td>{position.price ? money.format(position.price) : "—"}</td>
-                    <td>{money.format(position.market_value)}</td>
+                    <td>{known ? plain.format(position.average_cost ?? 0) : "—"}</td>
+                    <td>{position.price ? plain.format(position.price) : "—"}</td>
+                    <td>{plain.format(position.market_value)}</td>
                     <td className={pnl >= 0 ? "pnl-up" : "pnl-down"}>
-                      {position.average_cost ? `${pnl >= 0 ? "+" : ""}${money.format(pnl)}` : "—"}
+                      {known ? `${pnl >= 0 ? "+" : ""}${plain.format(pnl)}` : "—"}
                     </td>
                     <td className={pnl >= 0 ? "pnl-up" : "pnl-down"}>
-                      {position.average_cost ? `${signed(position.return_pct ?? 0)}%` : "—"}
+                      {known ? signed(position.return_pct ?? 0) : "—"}
                     </td>
-                    <td>{position.weight_pct.toFixed(2)}%</td>
+                    <td>{position.weight_pct.toFixed(2)}</td>
                   </tr>
                 );
               })}
@@ -333,7 +384,7 @@ function Dashboard({
         )}
         {incomplete.length > 0 && (
           <p className="muted-note">
-            * {incomplete.map((item) => item.ticker).join("、")} 有成交早于查询窗口，成本价仅覆盖部分数量，收益率会偏差。
+            * {incomplete.map((item) => item.ticker).join("、")} 有成交早于查询窗口，浮动盈亏只按已知成本的那部分股数计算。
           </p>
         )}
       </section>

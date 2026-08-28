@@ -162,6 +162,18 @@ def _rows(payload: Any, *keys: str) -> List[Dict[str, Any]]:
     return []
 
 
+def _trade_timestamp(row: Dict[str, Any]) -> Any:
+    """Fill timestamp. Equity trade rows use ``executionAt``.
+
+    Verified against live rows: the fields are executionId/orderId/clientOrderId/
+    symbol/quote/side/orderType/price/qty/total/executionAt/updatedAt. There is
+    no ``time`` key, so reading one silently returned 0 and broke both the
+    chronological sort and the paging cursor.
+    """
+
+    return _first(row, "executionAt", "updatedAt", "time", "transactTime", "createTime")
+
+
 def _earn_flexible_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Normalise a Simple Earn flexible position.
 
@@ -407,11 +419,17 @@ class BinanceStocksClient:
         payload = self._request("GET", "/sapi/v1/equity/trade/history", params=params, signed=True)
         return _rows(payload, "trades", "data", "rows")
 
-    def all_trades(self, *, lookback_days: int = 365, page_days: int = 30) -> List[Dict[str, Any]]:
+    def all_trades(self, *, lookback_days: int = 365, page_days: int = 7) -> List[Dict[str, Any]]:
         """Walk backwards in windows to assemble a full fill history.
 
-        Cost basis needs every fill, but each request is limited to a window, so
-        the range is paged. Duplicates are removed by executionId.
+        Pages at 7 days, not 30. A wide window is silently truncated rather than
+        rejected: measured on a live account, one 30-day request returned 20
+        fills while five 7-day slices over the same span returned 32. Paging
+        narrowly is the only way to get a complete set, and completeness matters
+        because a partial fill history understates cost quantity and corrupts
+        every P&L figure derived from it.
+
+        Duplicates are removed by executionId.
         """
 
         now_ms = int(time.time() * 1000)
@@ -436,7 +454,9 @@ class BinanceStocksClient:
                     continue
                 seen.add(key)
                 trades.append(row)
-            window_end = window_start
+            # Step strictly back past the window just read; equity fills carry
+            # `executionAt`, not `time`.
+            window_end = window_start - 1
         return trades
 
     def cost_basis(self, *, lookback_days: int = 365) -> Dict[str, Dict[str, Any]]:
@@ -454,9 +474,7 @@ class BinanceStocksClient:
 
         trades = self.all_trades(lookback_days=lookback_days)
         # Oldest first so the running average is chronologically correct.
-        trades.sort(key=lambda row: _as_float(
-            _first(row, "time", "transactTime", "createTime", "updateTime")
-        ))
+        trades.sort(key=lambda row: _as_float(_trade_timestamp(row)))
 
         books: Dict[str, Dict[str, Any]] = {}
         for row in trades:
@@ -482,7 +500,7 @@ class BinanceStocksClient:
                 "last_trade_ms": None,
                 "trade_count": 0,
             })
-            stamp = _as_float(_first(row, "time", "transactTime", "createTime"))
+            stamp = _as_float(_trade_timestamp(row))
             if stamp > 0:
                 book["first_trade_ms"] = book["first_trade_ms"] or stamp
                 book["last_trade_ms"] = stamp
