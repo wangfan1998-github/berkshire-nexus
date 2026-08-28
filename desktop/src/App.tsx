@@ -230,6 +230,41 @@ const ACTION_TONE: Record<string, "good" | "warn" | "risk" | "neutral"> = {
   AVOID: "risk",
 };
 
+const TASK_LABEL: Record<string, string> = {
+  briefing: "生成日报",
+  "live-account": "读取账户",
+  "live-preview": "预览策略",
+  "live-submit": "提交订单",
+  reconcile: "对账",
+  disclaimer: "签署声明",
+  verify: "凭证自检",
+  "ai-test": "测试模型",
+  save: "保存设置",
+  key: "保存 Key",
+  secret: "保存 Secret",
+  "ai-key": "保存 Token",
+  "alpha-key": "保存 Key",
+};
+
+/** Actions that must not overlap: they mutate credentials, orders or state. */
+const EXCLUSIVE: ReadonlySet<string> = new Set([
+  "boot", "live-submit", "reconcile", "disclaimer",
+  "key", "secret", "ai-key", "alpha-key",
+]);
+
+/**
+ * Should a control be disabled given the running task?
+ *
+ * Previously every button keyed off `busy !== null`, so generating a briefing
+ * (~80s) locked the entire app. Now a long read-only task only disables itself
+ * and other exclusive actions.
+ */
+function blocked(busy: BusyAction, self?: BusyAction): boolean {
+  if (busy === null) return false;
+  if (self && busy === self) return true;
+  return EXCLUSIVE.has(busy);
+}
+
 function pnlTone(value: number) {
   return value >= 0 ? "good" : "risk";
 }
@@ -262,7 +297,7 @@ function Dashboard({
             title="尚未读取真实账户"
             note="需要 API Key 与 Secret 都已配置（签名接口要求 Secret）。"
             action={
-              <button className="primary-button" disabled={busy !== null} onClick={() => void onRefresh()}>
+              <button className="primary-button" disabled={blocked(busy, "live-account")} onClick={() => void onRefresh()}>
                 {busy === "live-account" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}读取账户
               </button>
             }
@@ -322,7 +357,7 @@ function Dashboard({
           title="持仓明细"
           note="金额单位 USD。成本价由成交记录推导（Binance 无成本价接口）。点击表头可排序。"
           action={
-            <button className="secondary-button" disabled={busy !== null} onClick={() => void onRefresh()}>
+            <button className="secondary-button" disabled={blocked(busy, "live-account")} onClick={() => void onRefresh()}>
               {busy === "live-account" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}刷新
             </button>
           }
@@ -422,12 +457,14 @@ function BriefingPage({
   briefing,
   aiConfigured,
   busy,
+  elapsed,
   onGenerate,
   goTo,
 }: {
   briefing: DailyBriefing | null;
   aiConfigured: boolean;
   busy: BusyAction;
+  elapsed: number;
   onGenerate: () => Promise<void>;
   goTo: (page: PageId) => void;
 }) {
@@ -441,9 +478,9 @@ function BriefingPage({
           title="生成今日日报"
           note="全市场筛选 → 取交易场所实时价 → 确定性评分 → 结合成本价判断加减仓。"
           action={
-            <button className="primary-button" disabled={busy !== null} onClick={() => void onGenerate()}>
+            <button className="primary-button" disabled={blocked(busy, "briefing")} onClick={() => void onGenerate()}>
               {busy === "briefing" ? <LoaderCircle className="spin" size={15} /> : <Newspaper size={15} />}
-              {busy === "briefing" ? "生成中（约 1-2 分钟）" : "生成日报"}
+              {busy === "briefing" ? `生成中… ${elapsed}s（约 80s）` : "生成日报"}
             </button>
           }
         />
@@ -596,6 +633,7 @@ function StrategyPage({
   account,
   ready,
   busy,
+  elapsed,
   onSettings,
   onSaveSettings,
   onPreview,
@@ -609,6 +647,7 @@ function StrategyPage({
   account: LiveAccount | null;
   ready: boolean;
   busy: BusyAction;
+  elapsed: number;
   onSettings: (next: DesktopSettings) => void;
   onSaveSettings: () => Promise<void>;
   onPreview: () => Promise<void>;
@@ -675,10 +714,10 @@ function StrategyPage({
           note="预览不下单。提交需要逐字输入确认短语，且每次提交都是显式操作。"
           action={
             <div className="button-row">
-              <button className="secondary-button" disabled={busy !== null} onClick={() => void onReconcile()}>
+              <button className="secondary-button" disabled={blocked(busy, "reconcile")} onClick={() => void onReconcile()}>
                 {busy === "reconcile" ? <LoaderCircle className="spin" size={15} /> : <Activity size={15} />}对账
               </button>
-              <button className="danger-text-button" disabled={busy !== null} onClick={() => void onCancelAll()}>
+              <button className="danger-text-button" disabled={blocked(busy, "reconcile")} onClick={() => void onCancelAll()}>
                 <X size={15} />全部撤单
               </button>
             </div>
@@ -699,12 +738,13 @@ function StrategyPage({
             </div>
           </label>
           <div className="button-row">
-            <button className="secondary-button" disabled={busy !== null} onClick={() => void onPreview()}>
-              {busy === "live-preview" ? <LoaderCircle className="spin" size={15} /> : <FlaskConical size={15} />}预览（不下单）
+            <button className="secondary-button" disabled={blocked(busy, "live-preview")} onClick={() => void onPreview()}>
+              {busy === "live-preview" ? <LoaderCircle className="spin" size={15} /> : <FlaskConical size={15} />}
+              {busy === "live-preview" ? `预览中… ${elapsed}s` : "预览（不下单）"}
             </button>
             <button
               className="danger-button"
-              disabled={busy !== null || !acknowledged || approved.length === 0}
+              disabled={blocked(busy, "live-submit") || !acknowledged || approved.length === 0}
               onClick={() => void onSubmit(confirmation.trim())}
             >
               {busy === "live-submit" ? <LoaderCircle className="spin" size={15} /> : <Zap size={15} />}
@@ -1023,8 +1063,20 @@ export default function App() {
   const [alphaKeyConfigured, setAlphaKeyConfigured] = useState(false);
   const [busy, setBusy] = useState<BusyAction>("boot");
   const [toast, setToast] = useState<Toast | null>(null);
+  const [elapsed, setElapsed] = useState(0);
 
   const ready = keyConfigured && secretConfigured;
+
+  // A briefing takes ~80s. Without a visible counter the window reads as hung.
+  useEffect(() => {
+    if (busy === null || busy === "boot") {
+      setElapsed(0);
+      return;
+    }
+    setElapsed(0);
+    const timer = window.setInterval(() => setElapsed((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [busy]);
 
   const notify = useCallback((tone: Toast["tone"], message: string) => {
     setToast({ id: Date.now(), tone, message });
@@ -1206,7 +1258,7 @@ export default function App() {
       case "dashboard":
         return <Dashboard account={account} busy={busy} onRefresh={() => loadAccount(false)} goTo={setPage} />;
       case "briefing":
-        return <BriefingPage briefing={briefing} aiConfigured={aiKeyConfigured && settings.research.ai_enabled} busy={busy} onGenerate={generateBriefing} goTo={setPage} />;
+        return <BriefingPage briefing={briefing} aiConfigured={aiKeyConfigured && settings.research.ai_enabled} busy={busy} elapsed={elapsed} onGenerate={generateBriefing} goTo={setPage} />;
       case "strategy":
         return (
           <StrategyPage
@@ -1215,6 +1267,7 @@ export default function App() {
             account={account}
             ready={ready}
             busy={busy}
+            elapsed={elapsed}
             onSettings={setSettings}
             onSaveSettings={() => saveSettings("标的池已保存")}
             onPreview={() => runCycle("", false)}
@@ -1251,7 +1304,7 @@ export default function App() {
         );
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, account, briefing, cycle, settings, busy, ready, keyConfigured, secretConfigured, aiKeyConfigured, alphaKeyConfigured, credentialCheck]);
+  }, [page, account, briefing, cycle, settings, busy, elapsed, ready, keyConfigured, secretConfigured, aiKeyConfigured, alphaKeyConfigured, credentialCheck]);
 
   return (
     <div className="app-shell">
@@ -1295,11 +1348,17 @@ export default function App() {
             <p>{meta.intro}</p>
           </div>
           <div className="topbar-actions">
+            {busy !== null && busy !== "boot" && (
+              <div className="running-chip" role="status">
+                <LoaderCircle className="spin" size={13} />
+                <span>{TASK_LABEL[busy] ?? "处理中"} · {elapsed}s</span>
+              </div>
+            )}
             <button
               className="icon-button"
               aria-label="刷新账户"
               title="刷新账户"
-              disabled={busy !== null || !ready}
+              disabled={blocked(busy, "live-account") || !ready}
               onClick={() => void loadAccount(false)}
             >
               <RefreshCw className={busy === "live-account" ? "spin" : ""} size={17} />

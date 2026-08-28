@@ -145,12 +145,12 @@ fn run_json_command_full(
 }
 
 #[tauri::command]
-fn app_snapshot(app: AppHandle) -> Result<Value, String> {
+async fn app_snapshot(app: AppHandle) -> Result<Value, String> {
     run_json_command(&app, &["snapshot".to_string()], None, None)
 }
 
 #[tauri::command]
-fn analyze_tickers(
+async fn analyze_tickers(
     app: AppHandle,
     tickers: Vec<String>,
     research_config: Value,
@@ -164,7 +164,7 @@ fn analyze_tickers(
 }
 
 #[tauri::command]
-fn run_paper_cycle(
+async fn run_paper_cycle(
     app: AppHandle,
     tickers: Vec<String>,
     initial_cash: f64,
@@ -217,7 +217,7 @@ fn save_desktop_settings(app: AppHandle, settings: Value) -> Result<Value, Strin
 }
 
 #[tauri::command]
-fn promote_model(app: AppHandle) -> Result<Value, String> {
+async fn promote_model(app: AppHandle) -> Result<Value, String> {
     run_json_command(&app, &["model-promote".to_string()], None, None)
 }
 
@@ -281,7 +281,7 @@ fn binance_key_status() -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn binance_preflight(app: AppHandle, tickers: Vec<String>) -> Result<Value, String> {
+async fn binance_preflight(app: AppHandle, tickers: Vec<String>) -> Result<Value, String> {
     let api_key = keyring_entry(BINANCE_KEYRING_ACCOUNT)?
         .get_password()
         .map_err(|error| match error {
@@ -375,7 +375,7 @@ fn save_binance_secret(api_secret: String) -> Result<Value, String> {
 /// Signed round-trip against Binance to prove the credential pair works.
 /// Reports the failure cause in plain language instead of a bare error code.
 #[tauri::command]
-fn verify_binance_credentials(app: AppHandle) -> Result<Value, String> {
+async fn verify_binance_credentials(app: AppHandle) -> Result<Value, String> {
     let (key, secret) = binance_credentials()?;
     if key.trim() == secret.trim() {
         return Err(
@@ -423,7 +423,7 @@ fn binance_credentials() -> Result<(String, String), String> {
 
 /// AI supply-chain daily briefing. Read-only: it never places an order.
 #[tauri::command]
-fn daily_briefing(
+async fn daily_briefing(
     app: AppHandle,
     research_config: Value,
     per_segment: u32,
@@ -485,7 +485,7 @@ fn run_briefing_command(
 }
 
 #[tauri::command]
-fn screen_market(app: AppHandle, per_segment: u32) -> Result<Value, String> {
+async fn screen_market(app: AppHandle, per_segment: u32) -> Result<Value, String> {
     let (key, secret) = binance_credentials()?;
     run_json_command_full(
         &app,
@@ -502,7 +502,7 @@ fn screen_market(app: AppHandle, per_segment: u32) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn live_account(app: AppHandle) -> Result<Value, String> {
+async fn live_account(app: AppHandle) -> Result<Value, String> {
     let (key, secret) = binance_credentials()?;
     run_json_command_full(
         &app,
@@ -515,7 +515,7 @@ fn live_account(app: AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn live_reconcile(app: AppHandle) -> Result<Value, String> {
+async fn live_reconcile(app: AppHandle) -> Result<Value, String> {
     let (key, secret) = binance_credentials()?;
     run_json_command_full(
         &app,
@@ -528,7 +528,7 @@ fn live_reconcile(app: AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn live_accept_disclaimer(app: AppHandle) -> Result<Value, String> {
+async fn live_accept_disclaimer(app: AppHandle) -> Result<Value, String> {
     let (key, secret) = binance_credentials()?;
     run_json_command_full(
         &app,
@@ -541,7 +541,7 @@ fn live_accept_disclaimer(app: AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn live_cancel_all(app: AppHandle, symbol: Option<String>) -> Result<Value, String> {
+async fn live_cancel_all(app: AppHandle, symbol: Option<String>) -> Result<Value, String> {
     let (key, secret) = binance_credentials()?;
     let mut arguments = vec!["live-cancel-all".to_string()];
     if let Some(value) = symbol.filter(|item| !item.trim().is_empty()) {
@@ -557,7 +557,7 @@ fn live_cancel_all(app: AppHandle, symbol: Option<String>) -> Result<Value, Stri
 /// `submit` alone is not enough: `confirmation` must equal the acknowledgement
 /// string, and only then is the environment gate set for the child process.
 #[tauri::command]
-fn run_live_cycle(
+async fn run_live_cycle(
     app: AppHandle,
     tickers: Vec<String>,
     risk_config: Value,
@@ -600,7 +600,7 @@ fn run_live_cycle(
 }
 
 #[tauri::command]
-fn test_ai_provider(app: AppHandle, research_config: Value) -> Result<Value, String> {
+async fn test_ai_provider(app: AppHandle, research_config: Value) -> Result<Value, String> {
     let arguments = vec![
         "test-ai".to_string(),
         "--research-config-json".to_string(),

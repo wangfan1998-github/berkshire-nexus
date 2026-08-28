@@ -341,3 +341,7 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 
 /* Crowding tag: social attention is a warning, so it reads as a caution. */
 .crowded-tag { padding: 1px 6px; color: var(--amber); font-size: 9px; font-weight: 600; background: var(--amber-soft); border-radius: 2px; }
+
+/* Running indicator: a long task keeps going while you browse, so its state
+   must be visible from any page. */
+.running-chip { display: inline-flex; gap: 7px; align-items: center; padding: 6px 11px; color: var(--green-dark); font-size: 10px; font-family: var(--mono); background: var(--green-soft); border: 1px solid var(--green); border-radius: 3px; white-space: nowrap; }
