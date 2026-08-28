@@ -76,6 +76,10 @@ class BriefingIdea:
     news_label: str = ""
     news_article_count: int = 0
     news_available: bool = False
+    # 1y downsampled closes, for the trend sparkline.
+    price_history: List[Dict[str, Any]] = field(default_factory=list)
+    fifty_two_week_low: float = 0.0
+    fifty_two_week_high: float = 0.0
 
 
 @dataclass
@@ -402,6 +406,9 @@ class BriefingComposer:
                 news_label=(news.label if news else ""),
                 news_article_count=(news.article_count if news else 0),
                 news_available=(bool(news and news.available)),
+                price_history=list(getattr(report.financials, "price_history", []) or []),
+                fifty_two_week_low=float(report.financials.fifty_two_week_low or 0.0),
+                fifty_two_week_high=float(report.financials.fifty_two_week_high or 0.0),
             ))
 
         # Rank actionable ideas first, then by score.

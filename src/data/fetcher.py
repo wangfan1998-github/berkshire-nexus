@@ -14,6 +14,34 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
+def _downsample_history(
+    history: Tuple[List[int], List[float]],
+    points: int = 60,
+) -> List[Dict[str, Any]]:
+    """Reduce a 1y daily series to ~`points` samples for a sparkline.
+
+    Kept small on purpose: the whole briefing is serialised to JSON and handed to
+    the UI, so ~250 raw points per ticker across 20 tickers would bloat it for no
+    visual gain.
+    """
+
+    stamps, closes = history
+    pairs = [
+        (stamp, close) for stamp, close in zip(stamps, closes)
+        if close is not None and close > 0
+    ]
+    if not pairs:
+        return []
+    step = max(1, len(pairs) // max(1, points))
+    sampled = pairs[::step]
+    # Always keep the latest point so the line ends at the current price.
+    if sampled[-1] != pairs[-1]:
+        sampled.append(pairs[-1])
+    return [
+        {"t": int(stamp), "c": round(float(close), 4)} for stamp, close in sampled
+    ]
+
+
 @dataclass
 class CompanyFinancials:
     ticker: str
@@ -58,6 +86,9 @@ class CompanyFinancials:
     shares_outstanding: float = 0.0
     is_etf: bool = False
     industry: str = ""
+    # Downsampled 1y daily closes for a sparkline. The series is already fetched
+    # to compute beta and was being discarded; charts need it too.
+    price_history: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # Default fallback profile metrics for standard tech/macro universe
@@ -384,6 +415,7 @@ class DataFetcher:
             net_income=float(data.get("net_income") or 0.0),
             shareholders_equity=float(data.get("shareholders_equity") or 0.0),
             industry=str(data.get("industry") or ""),
+            price_history=_downsample_history(chart_history, 60),
             # An ETF has no issuer income statement: NASDAQ's fundamentals
             # endpoint returns nothing for revenue/equity/EPS. Verified live —
             # QQQM/SPYM/SMH/COWZ/URA all come back with zeros and are absent

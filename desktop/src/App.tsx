@@ -265,6 +265,192 @@ function blocked(busy: BusyAction, self?: BusyAction): boolean {
   return EXCLUSIVE.has(busy);
 }
 
+/** Sparkline of 1y closes. Colour follows first-to-last direction. */
+function Sparkline({
+  points,
+  low,
+  high,
+  width = 132,
+  height = 34,
+}: {
+  points: Array<{ t: number; c: number }>;
+  low?: number;
+  high?: number;
+  width?: number;
+  height?: number;
+}) {
+  if (points.length < 2) return <span className="muted">—</span>;
+  const values = points.map((p) => p.c);
+  // Anchor the scale to the 52-week range when known, so the line shows where
+  // price sits in its range rather than filling the box regardless.
+  const min = Math.min(...values, low && low > 0 ? low : Infinity);
+  const max = Math.max(...values, high && high > 0 ? high : -Infinity);
+  const span = max - min || 1;
+  const step = width / (points.length - 1);
+  const path = points
+    .map((p, i) => `${i === 0 ? "M" : "L"}${(i * step).toFixed(1)},${(height - ((p.c - min) / span) * height).toFixed(1)}`)
+    .join(" ");
+  const rising = values[values.length - 1] >= values[0];
+  const stroke = rising ? "var(--green)" : "var(--risk)";
+  const lastY = height - ((values[values.length - 1] - min) / span) * height;
+  return (
+    <svg className="sparkline" width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label="一年走势">
+      <path d={`${path} L${width},${height} L0,${height} Z`} fill={stroke} opacity="0.08" />
+      <path d={path} fill="none" stroke={stroke} strokeWidth="1.4" />
+      <circle cx={width} cy={lastY} r="2" fill={stroke} />
+    </svg>
+  );
+}
+
+interface Slice {
+  ticker: string;
+  weight_pct: number;
+  value?: number;
+  pnl?: number;
+  return_pct?: number;
+}
+
+/** Polar point on a circle, in SVG coordinates. */
+function polar(cx: number, cy: number, r: number, angleDeg: number) {
+  const a = ((angleDeg - 90) * Math.PI) / 180;
+  return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
+}
+
+/** Donut arc as a filled ring segment, so slices can be offset individually. */
+function arcPath(cx: number, cy: number, rOuter: number, rInner: number, from: number, to: number) {
+  // A single arc cannot express a full circle; nudge it so 100% still renders.
+  const sweep = Math.min(to - from, 359.99);
+  const end = from + sweep;
+  const o1 = polar(cx, cy, rOuter, from);
+  const o2 = polar(cx, cy, rOuter, end);
+  const i2 = polar(cx, cy, rInner, end);
+  const i1 = polar(cx, cy, rInner, from);
+  const large = sweep > 180 ? 1 : 0;
+  return [
+    `M${o1.x.toFixed(2)},${o1.y.toFixed(2)}`,
+    `A${rOuter},${rOuter} 0 ${large} 1 ${o2.x.toFixed(2)},${o2.y.toFixed(2)}`,
+    `L${i2.x.toFixed(2)},${i2.y.toFixed(2)}`,
+    `A${rInner},${rInner} 0 ${large} 0 ${i1.x.toFixed(2)},${i1.y.toFixed(2)}`,
+    "Z",
+  ].join(" ");
+}
+
+/**
+ * Interactive allocation donut.
+ *
+ * Hovering a slice or legend row lifts the slice and shows its detail in the
+ * centre, so the numbers are readable without a wall of legend text.
+ */
+function Donut({
+  rows,
+  size = 180,
+  title,
+  onHover,
+  activeTicker,
+}: {
+  rows: Slice[];
+  size?: number;
+  title?: string;
+  onHover?: (ticker: string | null) => void;
+  activeTicker?: string | null;
+}) {
+  const [internal, setInternal] = useState<string | null>(null);
+  const active = activeTicker !== undefined ? activeTicker : internal;
+  const setActive = (value: string | null) => {
+    setInternal(value);
+    onHover?.(value);
+  };
+
+  const shown = rows.filter((r) => r.weight_pct > 0.01);
+  if (shown.length === 0) return <span className="muted">—</span>;
+
+  const cx = size / 2;
+  const cy = size / 2;
+  const rOuter = size / 2 - 12;
+  const rInner = rOuter * 0.62;
+  const total = shown.reduce((sum, r) => sum + r.weight_pct, 0) || 100;
+
+  let cursor = 0;
+  const slices = shown.map((row, index) => {
+    const sweep = (row.weight_pct / total) * 360;
+    const from = cursor;
+    cursor += sweep;
+    return { row, from, to: from + sweep, index, mid: from + sweep / 2 };
+  });
+
+  const focused = slices.find((s) => s.row.ticker === active);
+  const centre = focused?.row;
+
+  return (
+    <div className="donut-wrap" style={{ width: size }}>
+      <svg
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        role="img"
+        aria-label={title ?? "组合占比"}
+        onMouseLeave={() => setActive(null)}
+      >
+        {slices.map(({ row, from, to, index, mid }) => {
+          const isActive = row.ticker === active;
+          // Lift the hovered slice outward along its own bisector.
+          const shift = isActive ? 4 : 0;
+          const offset = polar(0, 0, shift, mid);
+          return (
+            <path
+              key={row.ticker}
+              d={arcPath(cx, cy, rOuter, rInner, from, to)}
+              transform={`translate(${offset.x.toFixed(2)},${offset.y.toFixed(2)})`}
+              fill={sliceColor(row.ticker, index)}
+              opacity={active && !isActive ? 0.32 : 1}
+              className="donut-slice"
+              onMouseEnter={() => setActive(row.ticker)}
+              onFocus={() => setActive(row.ticker)}
+              tabIndex={0}
+            >
+              <title>{`${row.ticker} ${row.weight_pct.toFixed(2)}%`}</title>
+            </path>
+          );
+        })}
+      </svg>
+      <div className="donut-centre" aria-live="polite">
+        {centre ? (
+          <>
+            <strong className="mono">{centre.ticker}</strong>
+            <span className="donut-centre-pct">{centre.weight_pct.toFixed(2)}%</span>
+            {centre.value !== undefined && (
+              <span className="muted">{money.format(centre.value)}</span>
+            )}
+            {centre.return_pct !== undefined && centre.ticker !== "CASH" && (
+              <span className={centre.return_pct >= 0 ? "pnl-up" : "pnl-down"}>
+                {signed(centre.return_pct)}%
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            <strong>{shown.length}</strong>
+            <span className="muted">{title ?? "项持仓"}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function sliceColor(ticker: string, index: number) {
+  if (ticker === "CASH") return "var(--line-dark)";
+  return SLICE_COLORS[index % SLICE_COLORS.length];
+}
+
+// Ordered for adjacent-slice contrast, and checked to stay legible against the
+// paper background at small sizes.
+const SLICE_COLORS = [
+  "#3f6b52", "#c08b3e", "#4a7196", "#8c5f7d", "#b06a4c",
+  "#6f9b7a", "#d9b166", "#7fa2c2", "#a98aa6", "#c98d72",
+  "#2c5240", "#8a6a2e",
+];
+
 function pnlTone(value: number) {
   return value >= 0 ? "good" : "risk";
 }
@@ -287,6 +473,8 @@ function Dashboard({
 }) {
   const [sortKey, setSortKey] = useState<SortKey>(null);
   const [sortDesc, setSortDesc] = useState(true);
+  // Shared between chart and legend so hovering either highlights both.
+  const [hovered, setHovered] = useState<string | null>(null);
 
   if (!account) {
     return (
@@ -315,6 +503,24 @@ function Dashboard({
   const unrealised = account.unrealised_pnl ?? 0;
   const unrealisedPct = account.unrealised_pnl_pct ?? 0;
   const incomplete = account.positions.filter((item) => item.cost_complete === false);
+  const donutRows: Slice[] = [
+    ...account.positions
+      .filter((item) => item.market_value > 0.01)
+      .map((item) => ({
+        ticker: item.ticker,
+        weight_pct: item.weight_pct,
+        value: item.market_value,
+        pnl: item.unrealised_pnl,
+        return_pct: item.return_pct,
+      })),
+    ...(account.cash > 0.01
+      ? [{
+          ticker: "CASH",
+          weight_pct: (account.cash / Math.max(account.equity, 1)) * 100,
+          value: account.cash,
+        }]
+      : []),
+  ].sort((a, b) => b.weight_pct - a.weight_pct);
 
   const sorted = [...account.positions].sort((a, b) => {
     if (!sortKey) return a.ticker.localeCompare(b.ticker);
@@ -352,8 +558,40 @@ function Dashboard({
       </section>
 
       <section className="ruled-section">
+        <SectionHeading index="01" title="组合构成" note="按市值占比，含现金。" />
+        <div className="donut-row">
+          <Donut rows={donutRows} activeTicker={hovered} onHover={setHovered} title="项持仓" />
+          <table className="data-table numeric-table legend-table">
+            <thead>
+              <tr><th>标的</th><th>占比 %</th><th>市值 (USD)</th><th>收益率 %</th></tr>
+            </thead>
+            <tbody>
+              {donutRows.map((row, index) => (
+                <tr
+                  key={row.ticker}
+                  className={hovered === row.ticker ? "legend-active" : hovered ? "legend-dim" : ""}
+                  onMouseEnter={() => setHovered(row.ticker)}
+                  onMouseLeave={() => setHovered(null)}
+                >
+                  <td>
+                    <i className="legend-dot" style={{ background: sliceColor(row.ticker, index) }} />
+                    <span className="mono">{row.ticker}</span>
+                  </td>
+                  <td>{row.weight_pct.toFixed(2)}</td>
+                  <td>{row.value !== undefined ? plain.format(row.value) : "—"}</td>
+                  <td className={(row.return_pct ?? 0) >= 0 ? "pnl-up" : "pnl-down"}>
+                    {row.ticker === "CASH" || row.return_pct === undefined ? "—" : signed(row.return_pct)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="ruled-section">
         <SectionHeading
-          index="01"
+          index="02"
           title="持仓明细"
           note="金额单位 USD。成本价由成交记录推导（Binance 无成本价接口）。点击表头可排序。"
           action={
@@ -563,6 +801,7 @@ function BriefingPage({
                       <span>分 <strong>{idea.score.toFixed(1)}</strong></span>
                       <span>动量 <strong>{idea.momentum_score.toFixed(1)}</strong></span>
                       <span>{money.format(idea.price)} <em className={idea.change_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.change_pct)}%</em></span>
+                      <Sparkline points={idea.price_history ?? []} low={idea.fifty_two_week_low} high={idea.fifty_two_week_high} width={96} height={26} />
                       {idea.buzz_crowded && <span className="crowded-tag" title={idea.buzz_note}>拥挤</span>}
                       {idea.held_quantity > 0 ? (
                         <span>成本 {money.format(idea.average_cost)} <em className={idea.unrealised_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.unrealised_pct, 1)}%</em></span>
@@ -574,6 +813,22 @@ function BriefingPage({
                     <div className="idea-body">
                       <p><strong>判定依据</strong></p>
                       <ul>{idea.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>
+                      {idea.fifty_two_week_high > idea.fifty_two_week_low && (
+                        <>
+                          <p><strong>一年走势</strong></p>
+                          <div className="chart-row">
+                            <Sparkline points={idea.price_history ?? []} low={idea.fifty_two_week_low} high={idea.fifty_two_week_high} width={260} height={56} />
+                            <div className="range-meta">
+                              <span>52周低 {money.format(idea.fifty_two_week_low)}</span>
+                              <span>现价 {money.format(idea.price)}</span>
+                              <span>52周高 {money.format(idea.fifty_two_week_high)}</span>
+                              <span className="muted">
+                                区间分位 {(((idea.price - idea.fifty_two_week_low) / (idea.fifty_two_week_high - idea.fifty_two_week_low)) * 100).toFixed(0)}%
+                              </span>
+                            </div>
+                          </div>
+                        </>
+                      )}
                       <p className="muted">
                         仓位上限 {idea.position_cap_pct.toFixed(1)}%
                         {idea.held_quantity > 0 ? ` · 当前 ${idea.weight_pct.toFixed(2)}%` : ""}
@@ -672,6 +927,7 @@ function StrategyPage({
   goTo: (page: PageId) => void;
 }) {
   const [confirmation, setConfirmation] = useState("");
+  const [allocHover, setAllocHover] = useState<string | null>(null);
   const joined = settings.universe.join(", ");
   const [universeText, setUniverseText] = useState(joined);
   // Keep the field in step with the universe that was handed in, while leaving
@@ -685,6 +941,21 @@ function StrategyPage({
   }, [joined, syncedFrom]);
   const acknowledged = confirmation.trim() === LIVE_ACKNOWLEDGEMENT;
   const approved = cycle?.risk_decisions.filter((item) => item.approved) ?? [];
+  // Only rows that actually move, so the table stays about the change.
+  const allocDelta = (() => {
+    const alloc = cycle?.allocation;
+    if (!alloc) return [] as Array<{ ticker: string; before: number; after: number; delta: number }>;
+    const before = new Map(alloc.before.map((r) => [r.ticker, r.weight_pct]));
+    const after = new Map(alloc.after.map((r) => [r.ticker, r.weight_pct]));
+    return [...new Set([...before.keys(), ...after.keys()])]
+      .map((ticker) => {
+        const b = before.get(ticker) ?? 0;
+        const a = after.get(ticker) ?? 0;
+        return { ticker, before: b, after: a, delta: a - b };
+      })
+      .filter((row) => Math.abs(row.delta) > 0.01)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  })();
 
   const commitUniverse = () => {
     const next = universeText
@@ -808,6 +1079,37 @@ function StrategyPage({
           </div>
           {cycle.unpriced_positions && cycle.unpriced_positions.length > 0 && (
             <p className="warn-note">以下持仓取不到报价，权益被低估，实盘提交已被拒绝：{cycle.unpriced_positions.join("、")}</p>
+          )}
+          {cycle.allocation && cycle.allocation.after.length > 0 && (
+            <div className="alloc-compare">
+              <div>
+                <span className="alloc-label">调整前</span>
+                <Donut rows={cycle.allocation.before} size={150} activeTicker={allocHover} onHover={setAllocHover} title="项" />
+              </div>
+              <ArrowRight size={18} className="alloc-arrow" />
+              <div>
+                <span className="alloc-label">调整后（仅计入通过风控的订单）</span>
+                <Donut rows={cycle.allocation.after} size={150} activeTicker={allocHover} onHover={setAllocHover} title="项" />
+              </div>
+              <table className="data-table numeric-table alloc-table">
+                <thead><tr><th>标的</th><th>前 %</th><th>后 %</th><th>变化</th></tr></thead>
+                <tbody>
+                  {allocDelta.map((row) => (
+                    <tr
+                      key={row.ticker}
+                      className={allocHover === row.ticker ? "legend-active" : allocHover ? "legend-dim" : ""}
+                      onMouseEnter={() => setAllocHover(row.ticker)}
+                      onMouseLeave={() => setAllocHover(null)}
+                    >
+                      <td className="mono">{row.ticker}</td>
+                      <td>{row.before.toFixed(2)}</td>
+                      <td>{row.after.toFixed(2)}</td>
+                      <td className={row.delta >= 0 ? "pnl-up" : "pnl-down"}>{signed(row.delta)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
           {cycle.risk_decisions.length === 0 ? (
             <p className="muted-note">本轮没有产生任何目标订单（已在目标仓位附近）。</p>

@@ -392,6 +392,11 @@ export interface LiveCycleResult {
   risk_decisions: LiveRiskDecision[];
   executions: Execution[];
   approved_count: number;
+  allocation?: {
+    equity: number;
+    before: Array<{ ticker: string; value: number; weight_pct: number }>;
+    after: Array<{ ticker: string; value: number; weight_pct: number }>;
+  };
 }
 
 
@@ -441,6 +446,9 @@ export interface BriefingIdea {
   news_label: string;
   news_article_count: number;
   news_available: boolean;
+  price_history?: Array<{ t: number; c: number }>;
+  fifty_two_week_low: number;
+  fifty_two_week_high: number;
 }
 
 export interface BriefingSegment {

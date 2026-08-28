@@ -351,3 +351,44 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .flow-steps { margin: 12px 0 0; padding-left: 20px; color: var(--muted); font-size: 10px; line-height: 1.85; }
 .flow-steps li { margin-bottom: 3px; }
 .flow-steps strong { color: var(--ink); }
+
+/* ── Charts: inline SVG, no chart library ───────────────────────────── */
+.sparkline { display: block; flex-shrink: 0; }
+
+
+.chart-row { display: flex; gap: 20px; align-items: center; margin: 8px 0 12px; flex-wrap: wrap; }
+.range-meta { display: flex; flex-direction: column; gap: 3px; font-size: 9px; font-family: var(--mono); color: var(--muted); }
+
+.alloc-compare { display: flex; gap: 24px; align-items: center; margin: 14px 0; flex-wrap: wrap; }
+.alloc-compare > div { display: flex; flex-direction: column; gap: 7px; align-items: center; }
+.alloc-label { font-size: 9px; letter-spacing: 0.06em; color: var(--muted); text-transform: uppercase; }
+.alloc-arrow { color: var(--muted); flex-shrink: 0; }
+.alloc-table { flex: 1; min-width: 260px; margin: 0; }
+
+/* ── Interactive allocation donut ───────────────────────────────────── */
+.donut-row { display: flex; gap: 30px; align-items: flex-start; margin-top: 14px; flex-wrap: wrap; }
+
+.donut-wrap { position: relative; flex-shrink: 0; }
+.donut-slice { cursor: pointer; outline: none; transition: opacity 140ms ease, transform 140ms ease; }
+.donut-slice:hover { filter: brightness(1.06); }
+.donut-slice:focus-visible { stroke: var(--ink); stroke-width: 1.5; }
+
+/* Centre readout sits inside the ring; pointer-events off so it never blocks a
+   slice hover. */
+.donut-centre { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 1px; align-items: center; justify-content: center; pointer-events: none; text-align: center; }
+.donut-centre strong { font-size: 15px; }
+.donut-centre-pct { font-family: var(--mono); font-size: 18px; font-weight: 600; color: var(--ink); }
+.donut-centre span { font-size: 9px; }
+
+.legend-table { flex: 1; min-width: 320px; margin: 0; }
+.legend-table tbody tr { cursor: pointer; transition: background 120ms ease, opacity 120ms ease; }
+.legend-table tr.legend-active { background: var(--green-soft); }
+.legend-table tr.legend-dim { opacity: 0.42; }
+.legend-dot { display: inline-block; width: 9px; height: 9px; margin-right: 7px; border-radius: 2px; vertical-align: baseline; }
+
+.alloc-compare { display: flex; gap: 26px; align-items: flex-start; margin: 16px 0; flex-wrap: wrap; }
+.alloc-compare > div { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.alloc-label { max-width: 160px; font-size: 9px; letter-spacing: 0.06em; color: var(--muted); text-align: center; text-transform: uppercase; }
+.alloc-arrow { margin-top: 62px; color: var(--muted); flex-shrink: 0; }
+.alloc-table { flex: 1; min-width: 280px; margin: 0; }
+.alloc-table tbody tr { cursor: pointer; }

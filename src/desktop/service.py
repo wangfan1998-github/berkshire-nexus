@@ -642,6 +642,69 @@ class DesktopService:
         payload["reports"] = [self._report(report) for report in reports]
         return json_safe(payload)
 
+    @staticmethod
+    def _allocation_shift(
+        portfolio,
+        decisions: List[Dict[str, Any]],
+        prices: Dict[str, float],
+    ) -> Dict[str, Any]:
+        """Per-ticker weight before vs after, counting only approved orders.
+
+        Rejected orders are excluded: showing a projection that risk will block
+        would misrepresent the outcome.
+        """
+
+        equity = portfolio.equity
+        if equity <= 0.0:
+            return {"before": [], "after": [], "equity": 0.0}
+
+        quantities = dict(portfolio.quantities)
+        before = {
+            ticker: quantity * float(prices.get(ticker, portfolio.prices.get(ticker, 0.0)))
+            for ticker, quantity in quantities.items()
+        }
+        cash_before = portfolio.cash
+
+        after = dict(before)
+        cash_after = cash_before
+        for item in decisions:
+            if not item.get("approved"):
+                continue
+            order = item["order"]
+            ticker = str(order["ticker"])
+            notional = float(item["calculated_notional"])
+            if order["side"] == "SELL":
+                after[ticker] = max(after.get(ticker, 0.0) - notional, 0.0)
+                cash_after += notional
+            else:
+                after[ticker] = after.get(ticker, 0.0) + notional
+                cash_after -= notional
+
+        def rows(values: Dict[str, float], cash: float) -> List[Dict[str, Any]]:
+            total = sum(values.values()) + max(cash, 0.0)
+            out = [
+                {
+                    "ticker": ticker,
+                    "value": round(value, 2),
+                    "weight_pct": round(value / total * 100.0, 4) if total else 0.0,
+                }
+                for ticker, value in sorted(values.items())
+                if value > 0.01
+            ]
+            if cash > 0.01:
+                out.append({
+                    "ticker": "CASH",
+                    "value": round(cash, 2),
+                    "weight_pct": round(cash / total * 100.0, 4) if total else 0.0,
+                })
+            return out
+
+        return {
+            "before": rows(before, cash_before),
+            "after": rows(after, cash_after),
+            "equity": round(equity, 2),
+        }
+
     def live_funding(
         self,
         api_key: str,
@@ -854,6 +917,9 @@ class DesktopService:
             "risk_decisions": decisions,
             "executions": executions,
             "approved_count": sum(1 for item in decisions if item["approved"]),
+            # Weights before and after the approved orders, so the UI can show
+            # what the rebalance actually changes rather than just a table.
+            "allocation": self._allocation_shift(portfolio, decisions, prices),
         })
 
     @staticmethod
@@ -883,6 +949,10 @@ class DesktopService:
             "is_authoritative": report.financials.is_authoritative,
             "market_data_age_seconds": report.financials.market_data_age_seconds,
             "fallback_fields": report.financials.fallback_fields,
+            "price_history": report.financials.price_history,
+            "fifty_two_week_low": report.financials.fifty_two_week_low,
+            "fifty_two_week_high": report.financials.fifty_two_week_high,
+            "is_etf": report.financials.is_etf,
             "source_trace": report.financials.source_trace,
             "chokepoint": asdict(report.chokepoint),
             "masters": asdict(report.masters_debate),
