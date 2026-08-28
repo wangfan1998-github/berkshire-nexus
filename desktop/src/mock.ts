@@ -1,7 +1,9 @@
 import type { AnalysisReport, AppSnapshot, DesktopSettings } from "./types";
 
 export const defaultSettings: DesktopSettings = {
-  universe: ["AAPL", "MSFT", "NVDA", "TSM"],
+  // Empty by design: the screener/briefing decides the universe. A hardcoded
+  // list here gets persisted on first launch and then silently overrides it.
+  universe: [],
   interval_minutes: 60,
   initial_cash: 100_000,
   auto_promote_paper: false,

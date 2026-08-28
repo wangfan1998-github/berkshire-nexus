@@ -459,6 +459,7 @@ function BriefingPage({
   busy,
   elapsed,
   onGenerate,
+  onExecute,
   goTo,
 }: {
   briefing: DailyBriefing | null;
@@ -466,9 +467,14 @@ function BriefingPage({
   busy: BusyAction;
   elapsed: number;
   onGenerate: () => Promise<void>;
+  onExecute: (tickers: string[]) => void;
   goTo: (page: PageId) => void;
 }) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Only ADD and TRIM produce orders; HOLD and AVOID are informational.
+  const actionable = (briefing?.ideas ?? []).filter(
+    (idea) => idea.action === "ADD" || idea.action === "TRIM",
+  );
 
   return (
     <div className="page-stack">
@@ -618,7 +624,16 @@ function BriefingPage({
               ))}
             </div>
             <div className="button-row">
-              <button className="primary-button" onClick={() => goTo("strategy")}>去策略页执行 <ArrowRight size={15} /></button>
+              <button
+                className="primary-button"
+                disabled={actionable.length === 0}
+                onClick={() => onExecute(actionable.map((idea) => idea.ticker))}
+              >
+                把 {actionable.length} 个可执行标的送去策略页 <ArrowRight size={15} />
+              </button>
+              {actionable.length === 0 && (
+                <span className="muted">本轮没有 建仓/减仓 标的，无需执行</span>
+              )}
             </div>
           </section>
         </>
@@ -657,7 +672,17 @@ function StrategyPage({
   goTo: (page: PageId) => void;
 }) {
   const [confirmation, setConfirmation] = useState("");
-  const [universeText, setUniverseText] = useState(settings.universe.join(", "));
+  const joined = settings.universe.join(", ");
+  const [universeText, setUniverseText] = useState(joined);
+  // Keep the field in step with the universe that was handed in, while leaving
+  // in-progress manual edits alone.
+  const [syncedFrom, setSyncedFrom] = useState(joined);
+  useEffect(() => {
+    if (joined !== syncedFrom) {
+      setUniverseText(joined);
+      setSyncedFrom(joined);
+    }
+  }, [joined, syncedFrom]);
   const acknowledged = confirmation.trim() === LIVE_ACKNOWLEDGEMENT;
   const approved = cycle?.risk_decisions.filter((item) => item.approved) ?? [];
 
@@ -687,7 +712,7 @@ function StrategyPage({
         <SectionHeading
           index="01"
           title="标的池"
-          note="留空则用日报入选名单。逗号或空格分隔。"
+          note="策略只会对这里列出的标的下单。可从日报页一键带入，也可手动编辑（逗号或空格分隔）。"
           action={
             <button className="secondary-button" disabled={busy !== null} onClick={() => { commitUniverse(); void onSaveSettings(); }}>
               <Save size={15} />保存
@@ -695,16 +720,27 @@ function StrategyPage({
           }
         />
         <label className="field-label">
-          <span>UNIVERSE</span>
+          <span>UNIVERSE（{settings.universe.length} 个标的）</span>
           <input
             value={universeText}
             onChange={(event) => setUniverseText(event.target.value)}
             onBlur={commitUniverse}
-            placeholder="AAPL, NVDA, TSM"
+            placeholder="先去日报页生成，或手动输入 AAPL, NVDA, TSM"
             spellCheck={false}
           />
         </label>
+        {settings.universe.length === 0 && (
+          <p className="warn-note">
+            标的池为空。请先到日报页「生成日报」，或在上面手动输入代码。
+          </p>
+        )}
         <p className="muted-note">单笔上限 {money.format(settings.risk.max_single_order_notional)} · 单一标的上限 {settings.risk.max_position_pct}% · 可在设置页调整</p>
+        <ol className="flow-steps">
+          <li><strong>预览（不下单）</strong>：跑一遍研究→取价→风控，只显示会下什么单，不发给交易所。</li>
+          <li>看下方「预览结果」确认方向、数量、限价、以及被风控拒绝的原因。</li>
+          <li>确认无误后，在下面输入确认短语，再点<strong>提交真实订单</strong>。</li>
+          <li>提交后<strong>立即点「对账」</strong>——交易所回执只代表已挂单，不代表成交。</li>
+        </ol>
       </section>
 
       <section className="ruled-section">
@@ -1143,6 +1179,18 @@ export default function App() {
     }
   };
 
+  /** Carry the briefing's actionable picks into the strategy universe. */
+  const sendToStrategy = (tickers: string[]) => {
+    if (tickers.length === 0) return;
+    const next = { ...settings, universe: tickers };
+    setSettings(next);
+    // Persist so the Python side sees the same list on the next invocation.
+    void desktopBridge.saveSettings(next).catch(() => undefined);
+    setCycle(null);
+    setPage("strategy");
+    notify("info", `已带入 ${tickers.length} 个标的：${tickers.join("、")}。请先点「预览（不下单）」`);
+  };
+
   const generateBriefing = async () => {
     setBusy("briefing");
     try {
@@ -1152,6 +1200,15 @@ export default function App() {
         minimumScore: settings.risk.minimum_analysis_score,
       });
       setBriefing(value);
+      const actionable = value.ideas
+        .filter((idea) => idea.action === "ADD" || idea.action === "TRIM")
+        .map((idea) => idea.ticker);
+      if (actionable.length > 0) {
+        const next = { ...settings, universe: actionable };
+        setSettings(next);
+        void desktopBridge.saveSettings(next).catch(() => undefined);
+        setCycle(null);
+      }
       const adds = value.ideas.filter((idea) => idea.action === "ADD").length;
       const trims = value.ideas.filter((idea) => idea.action === "TRIM").length;
       notify(
@@ -1258,7 +1315,7 @@ export default function App() {
       case "dashboard":
         return <Dashboard account={account} busy={busy} onRefresh={() => loadAccount(false)} goTo={setPage} />;
       case "briefing":
-        return <BriefingPage briefing={briefing} aiConfigured={aiKeyConfigured && settings.research.ai_enabled} busy={busy} elapsed={elapsed} onGenerate={generateBriefing} goTo={setPage} />;
+        return <BriefingPage briefing={briefing} aiConfigured={aiKeyConfigured && settings.research.ai_enabled} busy={busy} elapsed={elapsed} onGenerate={generateBriefing} onExecute={sendToStrategy} goTo={setPage} />;
       case "strategy":
         return (
           <StrategyPage
