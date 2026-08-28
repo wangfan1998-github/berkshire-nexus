@@ -16,6 +16,17 @@ from .types import OrderIntent, PortfolioSnapshot
 @dataclass(frozen=True)
 class PlanningPolicy:
     minimum_score: float = 60.0
+    # Below the entry line a name is not worth *adding to*, which is not the same
+    # as being worth liquidating. Scores between `exit_score` and `minimum_score`
+    # are trimmed toward `soft_trim_retain` of the current position; only a score
+    # under `exit_score` is fully exited. Previously any sub-threshold score set
+    # the target weight to zero, so a 3.12%-weight position well inside its cap
+    # was sold in full purely for scoring 51.
+    exit_score: float = 40.0
+    soft_trim_retain: float = 0.5
+    # Cap how much of the book one cycle may turn over, so a broad scoring shift
+    # cannot trigger a wholesale reshuffle in a single run.
+    max_cycle_turnover_pct: float = 15.0
     max_portfolio_invested_pct: float = 80.0
     global_position_cap_pct: float = 10.0
     minimum_rebalance_notional: float = 25.0
@@ -49,6 +60,23 @@ class AllocationPlanner:
                 continue
             scored.append((report, round(combined, 4), learned_score))
 
+        # Held names that failed the entry test still need a target: keep part of
+        # the position unless the score has genuinely broken down.
+        soft_targets: Dict[str, float] = {}
+        equity_for_soft = portfolio.equity
+        for report in reports:
+            ticker = report.financials.ticker
+            held_value = portfolio.position_value(ticker)
+            if held_value <= 0.0 or equity_for_soft <= 0.0:
+                continue
+            score = report.final_composite_score
+            if score >= self.policy.minimum_score:
+                continue
+            current_weight = held_value / equity_for_soft
+            if score < self.policy.exit_score:
+                continue  # full exit: leave the target at zero
+            soft_targets[ticker] = current_weight * self.policy.soft_trim_retain
+
         target_weights = self._bounded_weights(scored)
         equity = portfolio.equity
         intents: List[OrderIntent] = []
@@ -65,9 +93,10 @@ class AllocationPlanner:
             price = report.financials.price
             if price <= 0.0:
                 continue
-            # Reports which fail the entry threshold get a zero target. Existing
-            # positions are therefore reduced instead of being silently ignored.
-            target_weight = target_weights.get(ticker, 0.0)
+            # Entry-eligible names take their bounded weight; held names that
+            # merely lost conviction take a partial target; only a broken-down
+            # score falls through to zero.
+            target_weight = target_weights.get(ticker, soft_targets.get(ticker, 0.0))
             target_value = equity * target_weight
             current_value = portfolio.position_value(ticker)
             difference = target_value - current_value
@@ -120,7 +149,36 @@ class AllocationPlanner:
             ))
 
         # Release cash from reductions before submitting buys.
-        return sorted(intents, key=lambda item: 0 if item.side == "SELL" else 1)
+        ordered = sorted(intents, key=lambda item: 0 if item.side == "SELL" else 1)
+        return self._cap_turnover(ordered, portfolio)
+
+    def _cap_turnover(
+        self,
+        intents: List[OrderIntent],
+        portfolio: PortfolioSnapshot,
+    ) -> List[OrderIntent]:
+        """Drop the least-conviction orders once the cycle turnover cap is hit.
+
+        A single scoring shift should not be able to reshape the whole book in one
+        run; without this, a batch of sub-threshold scores produced ~28% turnover.
+        """
+
+        equity = portfolio.equity
+        if equity <= 0.0 or self.policy.max_cycle_turnover_pct <= 0.0:
+            return intents
+        budget = equity * self.policy.max_cycle_turnover_pct / 100.0
+        kept: List[OrderIntent] = []
+        spent = 0.0
+        # Sells first (they fund buys), then by conviction within each side.
+        for intent in sorted(
+            intents,
+            key=lambda item: (0 if item.side == "SELL" else 1, -item.combined_score),
+        ):
+            if spent + intent.notional > budget:
+                continue
+            kept.append(intent)
+            spent += intent.notional
+        return sorted(kept, key=lambda item: 0 if item.side == "SELL" else 1)
 
     def _bounded_weights(
         self,

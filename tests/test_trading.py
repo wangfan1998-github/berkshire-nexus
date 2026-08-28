@@ -115,7 +115,9 @@ class PlannerTests(unittest.TestCase):
             analysis_id="analysis-1",
         )
 
-    def test_low_score_existing_position_is_planned_for_exit(self):
+    def test_broken_score_is_fully_exited(self):
+        """A score below exit_score liquidates the position."""
+
         portfolio = PortfolioSnapshot(
             cash=9_000.0,
             quantities={"AAPL": 10.0},
@@ -123,11 +125,46 @@ class PlannerTests(unittest.TestCase):
             start_of_day_equity=10_000.0,
             trading_date="2026-08-26",
         )
-        orders = AllocationPlanner().plan([self.report(40.0)], portfolio)
+        orders = AllocationPlanner().plan([self.report(25.0)], portfolio)
         self.assertEqual(len(orders), 1)
         self.assertEqual(orders[0].side, "SELL")
         self.assertEqual(orders[0].target_weight, 0.0)
 
+    def test_soft_score_trims_rather_than_liquidating(self):
+        """Between exit_score and minimum_score, keep half the position.
+
+        Losing conviction is not the same as needing to be out: a position well
+        inside its cap was previously sold in full purely for scoring under 60.
+        """
+
+        portfolio = PortfolioSnapshot(
+            cash=9_000.0,
+            quantities={"AAPL": 10.0},
+            prices={"AAPL": 100.0},
+            start_of_day_equity=10_000.0,
+            trading_date="2026-08-26",
+        )
+        orders = AllocationPlanner().plan([self.report(51.0)], portfolio)
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0].side, "SELL")
+        # Held 1000 of 10000 equity -> 10%; retain half -> 5%.
+        self.assertAlmostEqual(orders[0].target_weight, 0.05, places=4)
+        self.assertAlmostEqual(orders[0].quantity, 5.0, places=3)
+
+    def test_cycle_turnover_is_capped(self):
+        """One cycle cannot reshuffle the whole book."""
+
+        portfolio = PortfolioSnapshot(
+            cash=0.0,
+            quantities={"AAPL": 100.0},
+            prices={"AAPL": 100.0},
+            start_of_day_equity=10_000.0,
+            trading_date="2026-08-26",
+        )
+        # Full exit of a 100% position would be 10_000 of turnover; the default
+        # cap is 15% of equity, so the order must be dropped.
+        orders = AllocationPlanner().plan([self.report(25.0)], portfolio)
+        self.assertEqual(orders, [])
 
 class BinanceAdapterTests(unittest.TestCase):
     def test_live_orders_require_two_independent_gates(self):

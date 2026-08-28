@@ -522,6 +522,13 @@ class DesktopService:
             per_segment=per_segment,
         )
         tickers = [str(item["ticker"]) for item in screened.get("shortlist", [])]
+        # Always analyse what is actually held, even if the screener cannot see it.
+        # ETFs are absent from NASDAQ's stock screener, so 5 of 11 real positions
+        # were missing from the briefing entirely.
+        held_now = [str(value).upper() for value in screened.get("held_tickers", [])]
+        for ticker in held_now:
+            if ticker not in tickers:
+                tickers.append(ticker)
         if not tickers:
             raise ValueError(
                 "screener returned no candidates: "
@@ -553,10 +560,26 @@ class DesktopService:
 
         # Social attention + news sentiment. Free sources; failures degrade the
         # briefing rather than failing it.
-        attention = AttentionService(
+        # Free-tier news is 25 requests/day, well under one run over ~20 names.
+        # Spend it on holdings and the strongest candidates; an AVOID name never
+        # produces an order, so its news cannot change a decision today.
+        ranked = sorted(reports, key=lambda item: item.final_composite_score, reverse=True)
+        news_targets: List[str] = list(held_now)
+        for report in ranked:
+            ticker = report.financials.ticker
+            if ticker not in news_targets:
+                news_targets.append(ticker)
+            if len(news_targets) >= 12:
+                break
+
+        service = AttentionService(
             alpha_vantage_key=os.environ.get("ALPHAVANTAGE_API_KEY", ""),
             cache_dir=self.state_directory,
-        ).collect(tickers, include_news=True)
+        )
+        attention = service.collect(tickers, include_news=False)
+        for ticker in news_targets:
+            if service.news_client.configured:
+                attention.sentiment[ticker] = service.news_client.fetch(ticker)
 
         ai_service = AIResearchService(config, ai_api_key) if config.ai_enabled else None
         briefing = BriefingComposer(ai_service).compose(
