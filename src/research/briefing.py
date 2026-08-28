@@ -91,6 +91,19 @@ class DailyBriefing:
         }
 
 
+# A single-day move beyond this is chasing, not accumulating. Applied as a hard
+# gate rather than a score adjustment: momentum carries only 3.75% of the final
+# score (15% of the Qlib composite, which is 25% of the total), so a +22% day
+# could shift the score by at most ~1.5 points and never blocked an entry.
+CHASE_DAY_PCT = 5.0
+# Near the top of the 52-week range most of the move is already priced in.
+CHASE_RANGE_PCT = 92.0
+# ETFs hold dozens to hundreds of names, so the single-name concentration limit
+# does not apply to them; capping an index fund at 6% would force a diversified
+# holding to be shredded.
+ETF_POSITION_CAP_PCT = 30.0
+
+
 def classify_action(
     report: ComprehensiveAnalysisReport,
     *,
@@ -102,12 +115,36 @@ def classify_action(
 
     Deterministic on purpose: the LLM explains and challenges this call, it does
     not make it. Position caps come from the risk assessment, not the model.
+
+    ETFs take a separate path: their cap is wider because they are already
+    diversified, and their valuation is skipped because an index has no issuer
+    income statement to discount.
     """
 
     reasons: List[str] = []
     score = report.final_composite_score
-    cap = report.risk_assessment.recommended_max_allocation_pct
+    financials = report.financials
+    is_etf = bool(getattr(financials, "is_etf", False))
+    cap = (
+        ETF_POSITION_CAP_PCT if is_etf
+        else report.risk_assessment.recommended_max_allocation_pct
+    )
     held = held_quantity > 0.0
+
+    if is_etf:
+        # An ETF cannot be judged on ROE or a DCF, so only concentration and
+        # price action apply. Saying so is better than scoring it on fields that
+        # are structurally zero.
+        reasons.append(f"ETF：按分散化标的处理，仓位上限 {cap:.0f}%")
+        if held and weight_pct > cap + 0.05:
+            reasons.append(f"当前仓位 {weight_pct:.2f}% 超过 ETF 上限 {cap:.0f}%")
+            return "TRIM", reasons
+        chase = _chase_reason(report)
+        if chase:
+            reasons.append(chase)
+            return ("HOLD" if held else "AVOID"), reasons
+        reasons.append("估值与基本面引擎对指数不适用，仅依据仓位与价格位置")
+        return ("HOLD" if held else "ADD"), reasons
 
     if score < minimum_score:
         reasons.append(f"综合分 {score:.1f} 低于 {minimum_score:.0f} 分入场线")
@@ -124,6 +161,21 @@ def classify_action(
         reasons.append(f"仓位 {weight_pct:.2f}% 已接近上限 {cap:.1f}%")
         return "HOLD", reasons
 
+    # Hard chase gate, evaluated before any ADD is allowed.
+    chase = _chase_reason(report)
+    if chase:
+        reasons.append(chase)
+        return ("HOLD" if held else "AVOID"), reasons
+
+    # A negative margin of safety means the DCF says it is already expensive.
+    valuation = report.valuation
+    if getattr(valuation, "is_reliable", True) and valuation.margin_of_safety_pct < -10.0:
+        reasons.append(
+            f"安全边际 {valuation.margin_of_safety_pct:+.1f}%，内在价值 "
+            f"{valuation.intrinsic_value_dcf:.2f} 低于现价 {financials.price:.2f}"
+        )
+        return ("HOLD" if held else "AVOID"), reasons
+
     momentum = report.quant_factors.momentum_score
     if momentum < 40.0:
         reasons.append(f"动量 {momentum:.1f} 偏弱（{'；'.join(report.quant_factors.momentum_notes)}）")
@@ -137,6 +189,29 @@ def classify_action(
             f"注意：安全边际 {report.valuation.margin_of_safety_pct:+.1f}%，估值已偏贵"
         )
     return "ADD", reasons
+
+
+def _chase_reason(report: ComprehensiveAnalysisReport) -> str:
+    """Return why this is a chase, or an empty string when entry timing is fine.
+
+    Deliberately independent of the composite score: "it already ran today" is a
+    timing question, and diluting it into a 3.75%-weight factor let a +22% day
+    still clear the entry threshold.
+    """
+
+    financials = report.financials
+    change = float(financials.price_change_pct or 0.0)
+    if change >= CHASE_DAY_PCT:
+        return f"今日已涨 {change:+.1f}%，超过 {CHASE_DAY_PCT:.0f}% 追高阈值，今天不是买点"
+
+    low = float(financials.fifty_two_week_low or 0.0)
+    high = float(financials.fifty_two_week_high or 0.0)
+    price = float(financials.price or 0.0)
+    if high > low > 0.0 and price > 0.0:
+        position = (price - low) / (high - low) * 100.0
+        if position >= CHASE_RANGE_PCT:
+            return f"处于52周区间 {position:.0f}% 分位，上行空间已被大量定价"
+    return ""
 
 
 BRIEFING_SYSTEM = (

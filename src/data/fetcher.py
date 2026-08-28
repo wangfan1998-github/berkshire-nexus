@@ -49,6 +49,15 @@ class CompanyFinancials:
     market_data_age_seconds: Optional[int] = None
     fallback_fields: List[str] = field(default_factory=list)
     source_trace: List[Dict[str, Any]] = field(default_factory=list)
+    # Absolute figures. A DCF must not start from price, or intrinsic value
+    # scales with the quote and margin-of-safety becomes a constant.
+    free_cash_flow: float = 0.0
+    revenue: float = 0.0
+    net_income: float = 0.0
+    shareholders_equity: float = 0.0
+    shares_outstanding: float = 0.0
+    is_etf: bool = False
+    industry: str = ""
 
 
 # Default fallback profile metrics for standard tech/macro universe
@@ -370,6 +379,27 @@ class DataFetcher:
             is_authoritative=False,
             market_data_age_seconds=data.get("market_data_age_seconds"),
             fallback_fields=fallback_fields,
+            free_cash_flow=float(data.get("free_cash_flow") or 0.0),
+            revenue=float(data.get("revenue") or 0.0),
+            net_income=float(data.get("net_income") or 0.0),
+            shareholders_equity=float(data.get("shareholders_equity") or 0.0),
+            industry=str(data.get("industry") or ""),
+            # An ETF has no issuer income statement: NASDAQ's fundamentals
+            # endpoint returns nothing for revenue/equity/EPS. Verified live —
+            # QQQM/SPYM/SMH/COWZ/URA all come back with zeros and are absent
+            # from the stock screener entirely, while NVDA/CRM/TSM populate.
+            is_etf=bool(
+                data.get("is_etf")
+                or (
+                    not data.get("revenue")
+                    and not data.get("shareholders_equity")
+                    and not data.get("_ttm_eps")
+                )
+            ),
+            shares_outstanding=(
+                float(data["market_cap"]) / float(data["price"])
+                if data.get("market_cap") and data.get("price") else 0.0
+            ),
             source_trace=trace,
         )
 
@@ -492,6 +522,11 @@ class DataFetcher:
             "fcf_yield": self._ratio(
                 (operating_cash or 0.0) + (capex or 0.0), market_cap
             ),
+            # Keep the absolute value, not only the ratio.
+            "free_cash_flow": (operating_cash or 0.0) + (capex or 0.0),
+            "revenue": revenue_latest,
+            "net_income": net_income,
+            "shareholders_equity": equity,
             "roe": self._ratio(net_income, equity),
             "debt_to_equity": self._ratio(
                 (short_debt or 0.0) + (long_debt or 0.0), equity

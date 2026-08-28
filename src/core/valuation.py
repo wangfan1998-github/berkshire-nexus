@@ -30,10 +30,22 @@ class ValuationResult:
     valuation_status: str  # Significantly Undervalued / Fairly Valued / Overvalued
     moat_analysis: MoatDimensions
     dcf_assumptions: Dict[str, Any] = field(default_factory=dict)
+    # Whether intrinsic value came from absolute cash flows (trustworthy) or had
+    # to fall back to a price-derived estimate (not usable as a cheapness signal).
+    basis: str = "absolute-fcf"
+    is_reliable: bool = True
+    notes: List[str] = field(default_factory=list)
 
 
 class ValuationEngine:
-    """Calculates intrinsic value using Graham formulas, 2-stage DCF, and 5-dimension moat analysis."""
+    """Intrinsic value from Graham formulas, a 2-stage DCF, and moat analysis.
+
+    The DCF starts from **absolute** free cash flow and share count, never from
+    ``price * fcf_yield``. Using the price-derived figure made intrinsic value
+    scale linearly with the quote, so margin-of-safety was a constant for a given
+    company and carried no information about whether it was cheap. Verified:
+    at prices 100/150/300 the old model returned MoS -18.29% every time.
+    """
 
     def __init__(self, wacc: float = 0.095, terminal_growth: float = 0.025, risk_free_rate: float = 0.045):
         self.wacc = wacc
@@ -43,47 +55,82 @@ class ValuationEngine:
     def evaluate(self, d: CompanyFinancials) -> ValuationResult:
         sym = d.ticker.upper()
         moat = self._analyze_moat(d)
+        notes: List[str] = []
 
-        # 1. Graham Number & Growth Valuation
-        # Approximate Book Value Per Share using ROE: BVPS = EPS / max(ROE, 0.05)
-        est_bvps = max(d.eps / max(d.roe, 0.05), 1.0)
+        # 1. Graham Number & Growth Valuation (both already price-independent)
+        est_bvps = self._book_value_per_share(d)
         graham_num = math.sqrt(max(22.5 * max(d.eps, 0.1) * est_bvps, 0.0))
 
         growth_g = min(max(d.revenue_growth_yoy * 100, 2.0), 30.0)
         # Graham growth formula: V = EPS * (8.5 + 2g) * (4.4 / Y)
         graham_growth = max(d.eps, 0.1) * (8.5 + 2 * min(growth_g, 20.0)) * (4.4 / max(self.risk_free_rate * 100, 3.5))
 
-        # 2. Two-Stage DCF Model on Owner Earnings / FCF
-        # Base FCF per share = Price * FCF Yield
-        base_fcf_per_share = max(d.price * max(d.fcf_yield, 0.02), d.eps * 0.8)
+        # 2. Two-stage DCF on owner earnings, per share, from ABSOLUTE inputs.
+        shares = float(d.shares_outstanding or 0.0)
+        absolute_fcf = float(d.free_cash_flow or 0.0)
+        basis = "absolute-fcf"
+        reliable = True
+
+        if shares > 0.0 and absolute_fcf > 0.0:
+            base_fcf_per_share = absolute_fcf / shares
+        elif shares > 0.0 and d.net_income:
+            # Owner earnings proxy: net income is still independent of price.
+            base_fcf_per_share = float(d.net_income) / shares
+            basis = "net-income-proxy"
+            notes.append("缺少自由现金流，改用净利润近似所有者收益")
+        elif d.eps > 0.0:
+            # EPS is price-independent; a rough proxy but still not circular.
+            base_fcf_per_share = d.eps * 0.9
+            basis = "eps-proxy"
+            notes.append("缺少现金流与股数，改用 EPS 近似")
+        else:
+            # Nothing price-independent is available (typical for an ETF, where
+            # company fundamentals do not exist). Report unreliable rather than
+            # manufacturing a number from the price.
+            return ValuationResult(
+                ticker=sym,
+                current_price=d.price,
+                intrinsic_value_dcf=0.0,
+                graham_number=round(graham_num, 2),
+                graham_growth_value=round(graham_growth, 2),
+                margin_of_safety_pct=0.0,
+                valuation_status="Not Valuable (insufficient fundamentals)",
+                moat_analysis=moat,
+                dcf_assumptions={"reason": "no price-independent cash-flow input"},
+                basis="unavailable",
+                is_reliable=False,
+                notes=["无法在不依赖股价的前提下估值（ETF 或缺失财报）"],
+            )
+
         years = 5
-        projected_fcf = []
+        projected: List[float] = []
         current_fcf = base_fcf_per_share
         fade_rate = 0.85
+        for index in range(1, years + 1):
+            year_growth = d.revenue_growth_yoy * (fade_rate ** (index - 1))
+            current_fcf *= (1.0 + min(max(year_growth, 0.0), 0.35))
+            projected.append(current_fcf / ((1.0 + self.wacc) ** index))
 
-        for i in range(1, years + 1):
-            year_growth = d.revenue_growth_yoy * (fade_rate ** (i - 1))
-            current_fcf *= (1.0 + min(max(year_growth, 0.03), 0.35))
-            pv = current_fcf / ((1.0 + self.wacc) ** i)
-            projected_fcf.append(pv)
-
-        sum_pv_fcf = sum(projected_fcf)
-        # Terminal value at year 5
         terminal_fcf = current_fcf * (1.0 + self.terminal_growth)
         terminal_value = terminal_fcf / (self.wacc - self.terminal_growth)
-        pv_terminal_value = terminal_value / ((1.0 + self.wacc) ** years)
+        pv_terminal = terminal_value / ((1.0 + self.wacc) ** years)
+        intrinsic_dcf = round(sum(projected) + pv_terminal, 2)
 
-        intrinsic_dcf = round(sum_pv_fcf + pv_terminal_value, 2)
-        mos = round(((intrinsic_dcf - d.price) / intrinsic_dcf) * 100, 2)
+        # Margin of safety against the intrinsic estimate. Now that intrinsic is
+        # price-independent, this genuinely moves when the quote moves.
+        mos = round(((intrinsic_dcf - d.price) / intrinsic_dcf) * 100, 2) if intrinsic_dcf > 0 else 0.0
+
+        if basis != "absolute-fcf":
+            reliable = False
 
         if mos >= 20.0:
-            val_status = "Significantly Undervalued (High Margin of Safety)"
+            status = "Significantly Undervalued (High Margin of Safety)"
         elif mos >= 0.0:
-            val_status = "Fairly Valued (Reasonable Entry Zone)"
+            status = "Fairly Valued (Reasonable Entry Zone)"
         elif mos >= -20.0:
-            val_status = "Modestly Overvalued"
+            status = "Modestly Overvalued"
         else:
-            val_status = "Significantly Overvalued"
+            status = "Significantly Overvalued"
 
         return ValuationResult(
             ticker=sym,
@@ -92,15 +139,31 @@ class ValuationEngine:
             graham_number=round(graham_num, 2),
             graham_growth_value=round(graham_growth, 2),
             margin_of_safety_pct=mos,
-            valuation_status=val_status,
+            valuation_status=status,
             moat_analysis=moat,
             dcf_assumptions={
                 "wacc": f"{self.wacc*100:.1f}%",
                 "terminal_growth": f"{self.terminal_growth*100:.1f}%",
                 "starting_fcf_per_share": f"${base_fcf_per_share:.2f}",
-                "forecast_period": "5 Years"
-            }
+                "shares_outstanding": f"{shares:,.0f}",
+                "absolute_fcf": f"${absolute_fcf:,.0f}",
+                "forecast_period": "5 Years",
+            },
+            basis=basis,
+            is_reliable=reliable,
+            notes=notes,
         )
+
+    @staticmethod
+    def _book_value_per_share(d: CompanyFinancials) -> float:
+        """Book value per share, preferring reported equity over an ROE proxy."""
+
+        equity = float(d.shareholders_equity or 0.0)
+        shares = float(d.shares_outstanding or 0.0)
+        if equity > 0.0 and shares > 0.0:
+            return max(equity / shares, 1.0)
+        return max(d.eps / max(d.roe, 0.05), 1.0)
+
 
     def _analyze_moat(self, d: CompanyFinancials) -> MoatDimensions:
         sym = d.ticker.upper()

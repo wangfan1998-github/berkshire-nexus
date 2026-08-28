@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Any
 from ..data.fetcher import CompanyFinancials
@@ -83,264 +84,197 @@ class MastersDebateEngine:
             munger_inversion_summary=munger_inversion
         )
 
+    # ------------------------------------------------------------------
+    # Each master is expressed as a function of observable financials.
+    #
+    # Previously these were ticker if/elif chains covering 5 names, so every
+    # other symbol received an identical 3.12 consensus — 25% of the final score
+    # was a constant for essentially the whole market. The prose is now generated
+    # from the same numbers that drive the score, so a verdict is always
+    # attributable.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _scale(value: float, low: float, high: float) -> float:
+        """Map value in [low, high] onto 0..1, clamped."""
+
+        if high <= low:
+            return 0.0
+        return min(max((value - low) / (high - low), 0.0), 1.0)
+
+    @staticmethod
+    def _verdict(score: float) -> str:
+        if score >= 4.2:
+            return "STRONG BUY"
+        if score >= 3.6:
+            return "BUY"
+        if score >= 2.8:
+            return "HOLD"
+        return "PASS"
+
     def _eval_buffett(self, d: CompanyFinancials) -> MasterVote:
-        sym = d.ticker.upper()
-        if sym == "TSM":
-            return MasterVote(
-                name="Warren Buffett",
-                role="Durable Moat & Owner Earnings",
-                conviction=0.75,
-                score=4.5,
-                key_thesis="TSMC represents a modern economic tollbooth. Tremendous pricing power, ROE > 25%, and irreplaceable capital moat.",
-                primary_concern="Geopolitical tail risk and massive ongoing CapEx requirement to defend the lead.",
-                verdict="BUY"
-            )
-        elif sym == "UBER":
-            return MasterVote(
-                name="Warren Buffett",
-                role="Durable Moat & Owner Earnings",
-                conviction=0.80,
-                score=4.6,
-                key_thesis="Uber operates the quintessential asset-light platform network. Dominant market share, pricing power, and FCF inflection ($6B+) at P/E under 18x.",
-                primary_concern="Potential platform transition risks if autonomous driving fleets bypass third-party dispatchers.",
-                verdict="BUY"
-            )
-        elif sym == "APP":
-            return MasterVote(
-                name="Warren Buffett",
-                role="Durable Moat & Owner Earnings",
-                conviction=0.50,
-                score=3.7,
-                key_thesis="Incredible free cash flow generation and aggressive share buybacks, but lacks durable brand consumer moat.",
-                primary_concern="Software algorithm advantages can be ephemeral and are vulnerable to upstream gatekeeper rules.",
-                verdict="HOLD"
-            )
-        elif sym == "ADBE":
-            return MasterVote(
-                name="Warren Buffett",
-                role="Durable Moat & Owner Earnings",
-                conviction=0.60,
-                score=4.0,
-                key_thesis="Gross margin of 88% and sticky enterprise subscriptions. P/E of 15.8x offers substantial statistical margin of safety.",
-                primary_concern="Risk of generative AI lowering barrier to entry for creative creation and eroding moat.",
-                verdict="BUY"
-            )
-        elif sym == "SOFI":
-            return MasterVote(
-                name="Warren Buffett",
-                role="Durable Moat & Owner Earnings",
-                conviction=-0.40,
-                score=2.2,
-                key_thesis="Lending is a commodity business with high balance sheet risk. P/E near 40x is absurdly high for a bank.",
-                primary_concern="Credit default cycle and competitive margin compression from big money center banks.",
-                verdict="PASS"
-            )
-        else:
-            conv = 0.5 if d.roe > 0.15 and d.pe < 25 else -0.2
-            return MasterVote(
-                name="Warren Buffett",
-                role="Durable Moat & Owner Earnings",
-                conviction=conv,
-                score=3.5 if conv > 0 else 2.5,
-                key_thesis=f"ROE is {d.roe*100:.1f}%, FCF yield is {d.fcf_yield*100:.1f}%.",
-                primary_concern="Need to verify pricing power and competitive moat durability.",
-                verdict="BUY" if conv > 0 else "HOLD"
-            )
+        """Durable moat and owner earnings: ROE, margin, cash conversion, price."""
+
+        roe = self._scale(d.roe, 0.08, 0.30)
+        margin = self._scale(d.operating_margin, 0.05, 0.35)
+        cash = self._scale(d.fcf_yield, 0.01, 0.07)
+        # Buffett is price-sensitive: a great business at any price is not a buy.
+        cheap = 1.0 - self._scale(d.pe, 12.0, 45.0)
+        leverage = 1.0 - self._scale(d.debt_to_equity, 0.5, 2.5)
+        raw = roe * 0.30 + margin * 0.20 + cash * 0.20 + cheap * 0.20 + leverage * 0.10
+        score = round(1.0 + raw * 4.0, 2)
+        return MasterVote(
+            name="Warren Buffett",
+            role="Durable Moat & Owner Earnings",
+            conviction=round((raw - 0.5) * 2.0, 2),
+            score=score,
+            key_thesis=(
+                f"ROE {d.roe*100:.1f}%，营业利润率 {d.operating_margin*100:.1f}%，"
+                f"自由现金流收益率 {d.fcf_yield*100:.1f}%，P/E {d.pe:.1f}x。"
+                + ("现金创造能力与价格都在可接受区间。" if raw >= 0.55
+                   else "以当前价格衡量，所有者收益回报不够吸引。")
+            ),
+            primary_concern=(
+                f"负债/权益 {d.debt_to_equity:.2f}，杠杆偏高" if d.debt_to_equity > 1.5
+                else (f"P/E {d.pe:.1f}x 已反映较高预期" if d.pe > 30
+                      else "需确认十年后仍有同样的定价权"),
+            ),
+            verdict=self._verdict(score),
+        )
 
     def _eval_munger(self, d: CompanyFinancials) -> MasterVote:
-        sym = d.ticker.upper()
-        if sym in ["TSM", "UBER"]:
-            return MasterVote(
-                name="Charlie Munger",
-                role="Inversion & Lollapalooza Effects",
-                conviction=0.80,
-                score=4.6,
-                key_thesis="Scale advantages and network effects create self-reinforcing lollapalooza flywheels. High managerial competence.",
-                primary_concern="Avoid hubris and capital misallocation in non-core expansion.",
-                verdict="BUY"
-            )
-        elif sym == "APP":
-            return MasterVote(
-                name="Charlie Munger",
-                role="Inversion & Lollapalooza Effects",
-                conviction=0.35,
-                score=3.4,
-                key_thesis="Management is brilliant at capital allocation and buybacks, but ad tech is historically a fickle game.",
-                primary_concern="Invert: What kills AppLovin? Apple changing IDFA/privacy rules again or Meta matching performance.",
-                verdict="HOLD"
-            )
-        elif sym == "ADBE":
-            return MasterVote(
-                name="Charlie Munger",
-                role="Inversion & Lollapalooza Effects",
-                conviction=0.45,
-                score=3.5,
-                key_thesis="Historically one of the best software monopolies in history, currently hated by market due to AI panic.",
-                primary_concern="If young designers default to Figma and GenAI native canvas tools, Adobe becomes a legacy standard.",
-                verdict="HOLD"
-            )
-        elif sym == "SOFI":
-            return MasterVote(
-                name="Charlie Munger",
-                role="Inversion & Lollapalooza Effects",
-                conviction=-0.70,
-                score=1.5,
-                key_thesis="A fintech that tries to disguise banking risks as tech growth. High valuation on fragile fundamentals is a recipe for disaster.",
-                primary_concern="A bad lending book will eventually destroy equity in any financial institution.",
-                verdict="SELL / AVOID"
-            )
-        else:
-            return MasterVote(
-                name="Charlie Munger",
-                role="Inversion & Lollapalooza Effects",
-                conviction=0.2,
-                score=3.0,
-                key_thesis="Look for business simplicity and avoid unnecessary leverage.",
-                primary_concern="Debt and disruption risks.",
-                verdict="HOLD"
-            )
+        """Inversion: what kills it. Weighted toward downside and leverage."""
+
+        leverage_risk = self._scale(d.debt_to_equity, 0.3, 2.5)
+        volatility_risk = self._scale(d.beta, 1.0, 2.5)
+        thin_margin_risk = 1.0 - self._scale(d.operating_margin, 0.03, 0.30)
+        rich_price_risk = self._scale(d.pe, 20.0, 60.0)
+        risk = (
+            leverage_risk * 0.30 + volatility_risk * 0.25
+            + thin_margin_risk * 0.25 + rich_price_risk * 0.20
+        )
+        score = round(1.0 + (1.0 - risk) * 4.0, 2)
+        drivers = []
+        if leverage_risk > 0.5:
+            drivers.append(f"负债/权益 {d.debt_to_equity:.2f}")
+        if volatility_risk > 0.5:
+            drivers.append(f"Beta {d.beta:.2f}")
+        if thin_margin_risk > 0.5:
+            drivers.append(f"营业利润率仅 {d.operating_margin*100:.1f}%")
+        if rich_price_risk > 0.5:
+            drivers.append(f"P/E {d.pe:.1f}x")
+        return MasterVote(
+            name="Charlie Munger",
+            role="Inversion & Downside Analysis",
+            conviction=round((1.0 - risk - 0.5) * 2.0, 2),
+            score=score,
+            key_thesis=(
+                "下行风险可控：杠杆、波动与利润率都在可接受范围。" if risk < 0.4
+                else "存在明确的致死路径，需要更高的补偿才值得承担。"
+            ),
+            primary_concern=("；".join(drivers) if drivers else "周期与技术替代风险"),
+            verdict=self._verdict(score),
+        )
 
     def _eval_duan(self, d: CompanyFinancials) -> MasterVote:
-        sym = d.ticker.upper()
-        if sym == "TSM":
-            return MasterVote(
-                name="Duan Yongping (段永平)",
-                role="Business Model Purity & Right Things",
-                conviction=0.85,
-                score=4.8,
-                key_thesis="Good business: Pure-play foundry that does not compete with its customers. The more competitors fight, the more TSMC earns.",
-                primary_concern="Do the right thing: Keep culture of relentless engineering and yield excellence intact.",
-                verdict="BUY"
-            )
-        elif sym == "UBER":
-            return MasterVote(
-                name="Duan Yongping (段永平)",
-                role="Business Model Purity & Right Things",
-                conviction=0.80,
-                score=4.6,
-                key_thesis="Simple business model: Matches riders and drivers with unbeatable network density. Pricing power is proven.",
-                primary_concern="Stay focused on high-margin core mobility and delivery, avoid dilutive side ventures.",
-                verdict="BUY"
-            )
-        elif sym == "APP":
-            return MasterVote(
-                name="Duan Yongping (段永平)",
-                role="Business Model Purity & Right Things",
-                conviction=0.40,
-                score=3.5,
-                key_thesis="Ad arbitrage and AI optimization is highly profitable today, but 10-year model clarity is harder to guarantee.",
-                primary_concern="Customer loyalty is strictly mercenary based on short-term campaign ROAS.",
-                verdict="HOLD"
-            )
-        else:
-            return MasterVote(
-                name="Duan Yongping (段永平)",
-                role="Business Model Purity & Right Things",
-                conviction=0.1,
-                score=3.0,
-                key_thesis="Evaluate if the business is inherently easy to understand and has durable customer affection.",
-                primary_concern="Complexity and lack of pricing power.",
-                verdict="HOLD"
-            )
+        """Business model clarity: gross margin durability and simplicity."""
+
+        gross = self._scale(d.gross_margin, 0.25, 0.75)
+        operating = self._scale(d.operating_margin, 0.05, 0.35)
+        # A business whose sales grow while margins hold is simple to explain.
+        growth = self._scale(d.revenue_growth_yoy, 0.0, 0.30)
+        raw = gross * 0.40 + operating * 0.35 + growth * 0.25
+        score = round(1.0 + raw * 4.0, 2)
+        return MasterVote(
+            name="段永平",
+            role="Business Model & Mirror Test",
+            conviction=round((raw - 0.5) * 2.0, 2),
+            score=score,
+            key_thesis=(
+                f"毛利率 {d.gross_margin*100:.1f}% 说明产品有差异化；" if d.gross_margin >= 0.5
+                else f"毛利率仅 {d.gross_margin*100:.1f}%，产品接近同质化；"
+            ) + f"营收增速 {d.revenue_growth_yoy*100:.1f}%。",
+            primary_concern=(
+                "增速放缓时利润率能否守住" if d.revenue_growth_yoy < 0.10
+                else "高增速是否依赖持续的费用投入"
+            ),
+            verdict=self._verdict(score),
+        )
 
     def _eval_lilu(self, d: CompanyFinancials) -> MasterVote:
-        sym = d.ticker.upper()
-        if sym in ["TSM", "UBER", "GOOGL"]:
-            return MasterVote(
-                name="Li Lu (李录)",
-                role="10-Year Compounding & Margin of Safety",
-                conviction=0.85,
-                score=4.7,
-                key_thesis="10-year secular tailwind with structural compounding power. Reasonable valuation creates asymmetric risk/reward.",
-                primary_concern="Macro interest rate cycles and regulatory interventions.",
-                verdict="BUY"
-            )
-        elif sym == "ADBE":
-            return MasterVote(
-                name="Li Lu (李录)",
-                role="10-Year Compounding & Margin of Safety",
-                conviction=0.65,
-                score=4.1,
-                key_thesis="Deep statistical margin of safety (P/E 15.8x, FCF yield >6.5%). Market over-discounted AI death narrative.",
-                primary_concern="Verify if long-term subscription growth stabilizes above 8-10%.",
-                verdict="BUY"
-            )
-        else:
-            return MasterVote(
-                name="Li Lu (李录)",
-                role="10-Year Compounding & Margin of Safety",
-                conviction=-0.30 if d.pe > 30 else 0.20,
-                score=2.0 if d.pe > 30 else 3.2,
-                key_thesis="Strict discipline on margin of safety. Never overpay for unproven terminal value.",
-                primary_concern="Overvaluation and lack of 10-year predictability.",
-                verdict="PASS" if d.pe > 30 else "HOLD"
-            )
+        """Long-horizon compounding at a sane price."""
+
+        quality = self._scale(d.roe, 0.10, 0.28)
+        durability = self._scale(d.gross_margin, 0.30, 0.70)
+        value = 1.0 - self._scale(d.pe, 10.0, 40.0)
+        raw = quality * 0.35 + durability * 0.30 + value * 0.35
+        score = round(1.0 + raw * 4.0, 2)
+        return MasterVote(
+            name="李录",
+            role="Long-Horizon Compounding",
+            conviction=round((raw - 0.5) * 2.0, 2),
+            score=score,
+            key_thesis=(
+                f"ROE {d.roe*100:.1f}% 搭配 P/E {d.pe:.1f}x，"
+                + ("属于可长期持有的复利结构。" if raw >= 0.55
+                   else "长期复利空间被当前估值压缩。")
+            ),
+            primary_concern=(
+                f"P/E {d.pe:.1f}x 留给长期回报的空间有限" if d.pe > 30
+                else "需要确认竞争格局在十年尺度上稳定"
+            ),
+            verdict=self._verdict(score),
+        )
 
     def _eval_ackman(self, d: CompanyFinancials) -> MasterVote:
-        sym = d.ticker.upper()
-        if sym == "UBER":
-            return MasterVote(
-                name="Bill Ackman",
-                role="Activist Value & High-Conviction Compounder",
-                conviction=0.90,
-                score=4.9,
-                key_thesis="Classic Ackman compounder: Dominant market share, high barriers to entry, pricing power, expanding advertising margin, and massive share buybacks.",
-                primary_concern="Wage inflation and local municipal regulations.",
-                verdict="STRONG BUY"
-            )
-        elif sym == "APP":
-            return MasterVote(
-                name="Bill Ackman",
-                role="Activist Value & High-Conviction Compounder",
-                conviction=0.70,
-                score=4.2,
-                key_thesis="Astonishing operational leverage and aggressive capital return via buybacks.",
-                primary_concern="Governance and platform risk concentration.",
-                verdict="BUY"
-            )
-        else:
-            return MasterVote(
-                name="Bill Ackman",
-                role="Activist Value & High-Conviction Compounder",
-                conviction=0.3,
-                score=3.2,
-                key_thesis="Seek high cash generation and operational turnaround catalysts.",
-                primary_concern="Lack of near-term multiple expansion trigger.",
-                verdict="HOLD"
-            )
+        """Concentrated quality: scale, pricing power, cash generation."""
+
+        scale = self._scale(math.log10(max(d.market_cap, 1e8)), 9.5, 12.0)
+        pricing = self._scale(d.operating_margin, 0.10, 0.35)
+        cash = self._scale(d.fcf_yield, 0.02, 0.07)
+        raw = scale * 0.30 + pricing * 0.40 + cash * 0.30
+        score = round(1.0 + raw * 4.0, 2)
+        return MasterVote(
+            name="Bill Ackman",
+            role="Activist Value & Compounder",
+            conviction=round((raw - 0.5) * 2.0, 2),
+            score=score,
+            key_thesis=(
+                f"市值 {d.market_cap/1e9:.0f}B，营业利润率 {d.operating_margin*100:.1f}%，"
+                f"FCF 收益率 {d.fcf_yield*100:.1f}%。"
+                + ("规模与现金流支持集中持仓。" if raw >= 0.55 else "缺乏集中持仓所需的确定性。")
+            ),
+            primary_concern=(
+                "规模不足，缺乏抗冲击能力" if scale < 0.3
+                else "需要可执行的价值释放路径"
+            ),
+            verdict=self._verdict(score),
+        )
 
     def _eval_wood(self, d: CompanyFinancials) -> MasterVote:
-        sym = d.ticker.upper()
-        if sym in ["APP", "TSM"]:
-            return MasterVote(
-                name="Cathie Wood",
-                role="Disruptive Innovation & TAM Expansion",
-                conviction=0.90,
-                score=4.8,
-                key_thesis="Direct monetization winner in AI adoption curve (AXON / Advanced Foundry). Exponential TAM expansion.",
-                primary_concern="Short-term multiple compression in risk-off regimes.",
-                verdict="STRONG BUY"
-            )
-        elif sym == "UBER":
-            return MasterVote(
-                name="Cathie Wood",
-                role="Disruptive Innovation & TAM Expansion",
-                conviction=0.75,
-                score=4.3,
-                key_thesis="The global logistics and mobility layer that enables autonomous robotaxis to scale commercially.",
-                primary_concern="Speed of autonomous technology democratization.",
-                verdict="BUY"
-            )
-        else:
-            return MasterVote(
-                name="Cathie Wood",
-                role="Disruptive Innovation & TAM Expansion",
-                conviction=0.1,
-                score=2.8,
-                key_thesis="Incumbent tech faces disruptive innovation headwinds from AI native entrants.",
-                primary_concern="Innovator's dilemma and slowing legacy product lines.",
-                verdict="HOLD"
-            )
+        """Disruptive growth: top-line velocity, tolerant of valuation."""
+
+        growth = self._scale(d.revenue_growth_yoy, 0.05, 0.40)
+        gross = self._scale(d.gross_margin, 0.30, 0.75)
+        # Wood accepts volatility as the price of exposure to change.
+        beta_bonus = self._scale(d.beta, 0.8, 2.0) * 0.5
+        raw = growth * 0.55 + gross * 0.30 + beta_bonus * 0.15
+        score = round(1.0 + raw * 4.0, 2)
+        return MasterVote(
+            name="Cathie Wood",
+            role="Disruptive Innovation",
+            conviction=round((raw - 0.5) * 2.0, 2),
+            score=score,
+            key_thesis=(
+                f"营收增速 {d.revenue_growth_yoy*100:.1f}%，毛利率 {d.gross_margin*100:.1f}%。"
+                + ("具备指数级扩张的特征。" if raw >= 0.55 else "增长曲线不足以支撑颠覆叙事。")
+            ),
+            primary_concern=(
+                f"增速仅 {d.revenue_growth_yoy*100:.1f}%，颠覆性不明显"
+                if d.revenue_growth_yoy < 0.15 else "高估值对执行失误零容忍"
+            ),
+            verdict=self._verdict(score),
+        )
 
     def _get_mirror_test(self, sym: str, d: CompanyFinancials) -> str:
         templates = {
