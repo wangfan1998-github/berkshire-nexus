@@ -971,8 +971,22 @@ def summarise_symbol_tradability(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# Beyond this bid-ask spread the midpoint is not a fair value estimate. Measured
+# after hours on a live book: SMH quoted 570.11/600.00 (5.1% wide) so the midpoint
+# read 585 against a true market price near 573. Liquid names sit at 0.01-0.3%.
+MAX_TRUSTED_SPREAD_PCT = 1.5
+
+
 def merge_quote_price(quote: Dict[str, Any]) -> float:
-    """Best-effort last price from an equity quote payload."""
+    """Best-effort price from an equity quote payload.
+
+    Prefers a real traded/last price. Falls back to the bid-ask midpoint only
+    when the book is tight: a wide after-hours spread makes the midpoint an
+    invented number, which then propagates into market value, P&L and order
+    sizing. When the spread is too wide the **bid** is used instead — it is the
+    price a holding could actually be sold at, so it understates rather than
+    flatters the position.
+    """
 
     if not isinstance(quote, dict):
         return 0.0
@@ -989,5 +1003,22 @@ def merge_quote_price(quote: Dict[str, Any]) -> float:
     bid = _as_float(_first(quote, "bidPrice", "bid"))
     ask = _as_float(_first(quote, "askPrice", "ask"))
     if bid > 0.0 and ask > 0.0:
-        return (bid + ask) / 2.0
-    return 0.0
+        midpoint = (bid + ask) / 2.0
+        spread_pct = (ask - bid) / midpoint * 100.0 if midpoint > 0 else 0.0
+        if spread_pct <= MAX_TRUSTED_SPREAD_PCT:
+            return midpoint
+        return bid
+    return bid or ask or 0.0
+
+
+def quote_spread_pct(quote: Dict[str, Any]) -> float:
+    """Bid-ask spread as a percentage, or 0 when it cannot be computed."""
+
+    if not isinstance(quote, dict):
+        return 0.0
+    bid = _as_float(_first(quote, "bidPrice", "bid"))
+    ask = _as_float(_first(quote, "askPrice", "ask"))
+    if bid <= 0.0 or ask <= 0.0:
+        return 0.0
+    midpoint = (bid + ask) / 2.0
+    return (ask - bid) / midpoint * 100.0 if midpoint > 0 else 0.0

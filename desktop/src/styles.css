@@ -398,3 +398,4 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .idea-price, .idea-cost { white-space: nowrap; }
 .donut-side { flex: 1; min-width: 260px; }
 .metric-row.compact > div { padding: 10px 12px; }
+.spread-flag { margin-left: 3px; color: var(--amber); font-weight: 600; cursor: help; }

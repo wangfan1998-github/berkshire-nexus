@@ -23,6 +23,7 @@ from ..trading.binance_stocks import (
     BinanceAPIError,
     BinanceStocksClient,
     merge_quote_price,
+    quote_spread_pct,
 )
 from ..trading.live import LiveBroker
 from ..trading.planner import AllocationPlanner
@@ -253,12 +254,15 @@ class DesktopService:
         # Price the positions so the UI can show market value, not just quantity.
         prices: Dict[str, float] = {}
         quote_errors: Dict[str, str] = {}
+        spreads: Dict[str, float] = {}
         for position in positions:
             ticker = str(position.get("ticker", ""))
             if not ticker:
                 continue
             try:
-                prices[ticker] = merge_quote_price(client.latest_quote(ticker))
+                quote = client.latest_quote(ticker)
+                prices[ticker] = merge_quote_price(quote)
+                spreads[ticker] = round(quote_spread_pct(quote), 2)
             except (BinanceAPIError, ValueError) as error:
                 quote_errors[ticker] = str(error)
         holdings_value = 0.0
@@ -274,6 +278,9 @@ class DesktopService:
             market_value = quantity * price
             position["price"] = price
             position["market_value"] = market_value
+            # A wide book means the price is an estimate, not a quote to trust.
+            position["spread_pct"] = spreads.get(ticker, 0.0)
+            position["price_unreliable"] = spreads.get(ticker, 0.0) > 1.5
             holdings_value += market_value
 
             book = basis.get(ticker, {})

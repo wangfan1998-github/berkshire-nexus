@@ -250,6 +250,8 @@ export interface LivePosition {
   fees_paid?: number;
   trade_count?: number;
   cost_complete?: boolean;
+  spread_pct?: number;
+  price_unreliable?: boolean;
   cost_covered_quantity?: number;
   wallet_assets?: string[];
   tokenized?: boolean;

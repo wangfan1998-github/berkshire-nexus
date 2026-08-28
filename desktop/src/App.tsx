@@ -625,7 +625,12 @@ function Dashboard({
                     </td>
                     <td>{position.quantity.toFixed(4)}</td>
                     <td>{known ? plain.format(position.average_cost ?? 0) : "—"}</td>
-                    <td>{position.price ? plain.format(position.price) : "—"}</td>
+                    <td>
+                      {position.price ? plain.format(position.price) : "—"}
+                      {position.price_unreliable && (
+                        <span className="spread-flag" title={`买卖价差 ${position.spread_pct?.toFixed(2)}%，盘后报价不可靠，已采用买价（可卖出价）`}>~</span>
+                      )}
+                    </td>
                     <td>{plain.format(position.market_value)}</td>
                     <td className={pnl >= 0 ? "pnl-up" : "pnl-down"}>
                       {known ? `${pnl >= 0 ? "+" : ""}${plain.format(pnl)}` : "—"}
@@ -639,6 +644,12 @@ function Dashboard({
               })}
             </tbody>
           </table>
+        )}
+        {account.positions.some((p) => p.price_unreliable) && (
+          <p className="muted-note">
+            ~ 标记的标的买卖价差过大（盘后流动性差），已采用买价而非中间价 —— 中间价会虚增市值。
+            开盘后价差收窄即恢复正常。
+          </p>
         )}
         {incomplete.length > 0 && (
           <p className="muted-note">
