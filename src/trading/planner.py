@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
@@ -75,6 +76,18 @@ class AllocationPlanner:
             side = "BUY" if difference > 0.0 else "SELL"
             notional = abs(difference)
             quantity = round(notional / price, 6)
+            if side == "SELL":
+                # Rounding to 6dp can land above the real holding, which has more
+                # precision (held 1.0718605 -> planned 1.071861, i.e. 5e-7 too
+                # many shares). That exceeded the risk engine's 1e-9 tolerance and
+                # rejected a legitimate full exit. Never plan to sell more than is
+                # actually held; truncate rather than round.
+                held = float(portfolio.quantities.get(ticker, 0.0))
+                if quantity > held:
+                    quantity = math.floor(held * 1e6) / 1e6
+                if quantity <= 0.0:
+                    continue
+                notional = quantity * price
             buffer = self.policy.limit_buffer_bps / 10_000.0
             limit_price = round(price * (1.0 + buffer if side == "BUY" else 1.0 - buffer), 2)
             intents.append(OrderIntent(

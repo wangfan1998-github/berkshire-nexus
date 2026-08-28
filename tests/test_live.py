@@ -339,7 +339,7 @@ class LiveBrokerTests(unittest.TestCase):
         )
         self.assertFalse(decision.approved)
         self.assertIn(
-            "third-party research data is not broker-authoritative for live execution",
+            "价格非券商权威来源，实盘拒绝执行",
             decision.reasons,
         )
 
