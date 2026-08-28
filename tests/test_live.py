@@ -14,6 +14,7 @@ from src.trading.binance_stocks import (
     BinanceStocksClient,
     LiveTradingDisabledError,
     classify_place_ack,
+    MAX_TRUSTED_SPREAD_PCT,
     merge_quote_price,
     quote_spread_pct,
     summarise_symbol_tradability,
@@ -300,30 +301,29 @@ class AckAndHelperTests(unittest.TestCase):
         self.assertFalse(summarise_symbol_tradability({"tradability": "SELL"})["allows_buy"])
         self.assertTrue(summarise_symbol_tradability({"tradability": "NONE"})["halted"])
 
-    def test_wide_spread_uses_bid_not_midpoint(self):
-        """A wide after-hours book makes the midpoint an invented price.
+    def test_wide_spread_is_detectable_by_callers(self):
+        """A wide book still mids, but callers must be able to see it is wide.
 
-        Measured live: SMH quoted 570.11/600.00 (5.1% wide), so the midpoint read
-        585 against a true market price near 573 — inflating market value and P&L.
-        The bid is used instead, since that is where the holding could be sold.
+        Binance's equity quote has no last-traded price, so every figure from it
+        is an estimate. Measured against Yahoo across 8 live holdings, mean
+        absolute error was midpoint 1.33%, ask 1.62%, bid 1.80% — so the midpoint
+        stays, and a wide spread is surfaced rather than swapped for the bid.
         """
 
-        wide = {"bidPrice": "570.11", "askPrice": "600.00"}
-        self.assertAlmostEqual(merge_quote_price(wide), 570.11)
-        self.assertGreater(quote_spread_pct(wide), 5.0)
+        wide = {"bidPrice": "570.11", "askPrice": "599.99"}
+        self.assertAlmostEqual(merge_quote_price(wide), 585.05)
+        self.assertGreater(quote_spread_pct(wide), MAX_TRUSTED_SPREAD_PCT)
 
-        # A tight book still uses the midpoint.
         tight = {"bidPrice": "296.13", "askPrice": "296.17"}
         self.assertAlmostEqual(merge_quote_price(tight), 296.15)
-        self.assertLess(quote_spread_pct(tight), 0.1)
+        self.assertLess(quote_spread_pct(tight), MAX_TRUSTED_SPREAD_PCT)
 
     def test_single_sided_book_still_yields_a_price(self):
         self.assertAlmostEqual(merge_quote_price({"bidPrice": "10"}), 10.0)
         self.assertAlmostEqual(merge_quote_price({"askPrice": "12"}), 12.0)
 
     def test_quote_price_falls_back_to_mid(self):
-        # 10/12 is an 18% spread, so the bid is correct here; a tight book mids.
-        self.assertAlmostEqual(merge_quote_price({"bidPrice": "10", "askPrice": "12"}), 10.0)
+        self.assertAlmostEqual(merge_quote_price({"bidPrice": "10", "askPrice": "12"}), 11.0)
         self.assertAlmostEqual(merge_quote_price({"bidPrice": "10.00", "askPrice": "10.05"}), 10.025)
         self.assertAlmostEqual(merge_quote_price({"data": [{"lastPrice": "5.5"}]}), 5.5)
         self.assertEqual(merge_quote_price({}), 0.0)

@@ -627,8 +627,11 @@ function Dashboard({
                     <td>{known ? plain.format(position.average_cost ?? 0) : "—"}</td>
                     <td>
                       {position.price ? plain.format(position.price) : "—"}
+                      {position.price_source === "market-close" && (
+                        <span className="spread-flag" title={`Binance 盘后买卖价差 ${position.spread_pct?.toFixed(2)}%，已改用交易所收盘价`}>*</span>
+                      )}
                       {position.price_unreliable && (
-                        <span className="spread-flag" title={`买卖价差 ${position.spread_pct?.toFixed(2)}%，盘后报价不可靠，已采用买价（可卖出价）`}>~</span>
+                        <span className="spread-flag" title={`买卖价差 ${position.spread_pct?.toFixed(2)}%，且无法取得交易所价格，此价为估算`}>~</span>
                       )}
                     </td>
                     <td>{plain.format(position.market_value)}</td>
@@ -645,10 +648,15 @@ function Dashboard({
             </tbody>
           </table>
         )}
-        {account.positions.some((p) => p.price_unreliable) && (
+        {account.positions.some((p) => p.price_source === "market-close") && (
           <p className="muted-note">
-            ~ 标记的标的买卖价差过大（盘后流动性差），已采用买价而非中间价 —— 中间价会虚增市值。
-            开盘后价差收窄即恢复正常。
+            * 标记的标的在 Binance 盘后买卖价差过大（挂单稀疏），已改用交易所实际收盘价计算。
+            开盘后价差收窄会自动切回 Binance 报价。
+          </p>
+        )}
+        {account.positions.some((p) => p.price_unreliable) && (
+          <p className="warn-note">
+            ~ 标记的标的价差过大且取不到交易所价格，该现价为估算值，市值与收益率会有偏差。
           </p>
         )}
         {incomplete.length > 0 && (

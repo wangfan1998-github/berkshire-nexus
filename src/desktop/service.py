@@ -14,6 +14,7 @@ from ..agent.cycle import PaperTradingAgent
 from ..core.orchestrator import ComprehensiveAnalysisReport, OmniAlphaOrchestrator
 from ..learning.registry import ChampionChallengerRegistry
 from ..data.attention import AttentionService, NewsSentiment
+from ..data.fetcher import DataFetcher
 from ..data.screener import MarketScreener, segment_catalogue
 from ..research.briefing import BriefingComposer
 from ..research.ai import AIResearchService
@@ -22,6 +23,7 @@ from ..trading.binance_stocks import (
     LIVE_ACKNOWLEDGEMENT,
     BinanceAPIError,
     BinanceStocksClient,
+    MAX_TRUSTED_SPREAD_PCT,
     merge_quote_price,
     quote_spread_pct,
 )
@@ -255,16 +257,36 @@ class DesktopService:
         prices: Dict[str, float] = {}
         quote_errors: Dict[str, str] = {}
         spreads: Dict[str, float] = {}
+        price_sources: Dict[str, str] = {}
+        fetcher = DataFetcher()
         for position in positions:
             ticker = str(position.get("ticker", ""))
             if not ticker:
                 continue
+            venue_price = 0.0
             try:
                 quote = client.latest_quote(ticker)
-                prices[ticker] = merge_quote_price(quote)
+                venue_price = merge_quote_price(quote)
                 spreads[ticker] = round(quote_spread_pct(quote), 2)
             except (BinanceAPIError, ValueError) as error:
                 quote_errors[ticker] = str(error)
+
+            # Binance's equity book has no last-traded price, so after hours its
+            # midpoint drifts from the real market — measured 1.33% mean error and
+            # up to 3.9% on thin ETFs. For *valuing* a holding, use the exchange's
+            # actual market price; the venue book still prices orders, where the
+            # spread is what you would really transact against.
+            if spreads.get(ticker, 0.0) > MAX_TRUSTED_SPREAD_PCT:
+                try:
+                    market = fetcher.fetch_quote(ticker)
+                    if market.price > 0.0:
+                        prices[ticker] = market.price
+                        price_sources[ticker] = "market-close"
+                        continue
+                except Exception:
+                    pass
+            prices[ticker] = venue_price
+            price_sources[ticker] = "binance-mid"
         holdings_value = 0.0
         total_cost = 0.0
         realised_total = 0.0
@@ -280,7 +302,12 @@ class DesktopService:
             position["market_value"] = market_value
             # A wide book means the price is an estimate, not a quote to trust.
             position["spread_pct"] = spreads.get(ticker, 0.0)
-            position["price_unreliable"] = spreads.get(ticker, 0.0) > 1.5
+            position["price_source"] = price_sources.get(ticker, "")
+            # Only flag when we could not improve on a wide venue midpoint.
+            position["price_unreliable"] = (
+                spreads.get(ticker, 0.0) > MAX_TRUSTED_SPREAD_PCT
+                and price_sources.get(ticker) != "market-close"
+            )
             holdings_value += market_value
 
             book = basis.get(ticker, {})

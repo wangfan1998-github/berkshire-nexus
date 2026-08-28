@@ -251,6 +251,7 @@ export interface LivePosition {
   trade_count?: number;
   cost_complete?: boolean;
   spread_pct?: number;
+  price_source?: string;
   price_unreliable?: boolean;
   cost_covered_quantity?: number;
   wallet_assets?: string[];
