@@ -142,6 +142,53 @@ class AIResearchService:
             "picks": parsed.get("picks", []),
         }
 
+    def score_headlines(self, batches: Dict[str, Any]) -> Dict[str, Any]:
+        """Score headlines per ticker in ONE call.
+
+        Alpha Vantage's free tier is 25 requests/day, far short of ~20 tickers
+        several times a day. Google News RSS supplies unlimited headlines with no
+        score, so the configured model does the scoring — batched into a single
+        request so cost stays flat regardless of ticker count.
+        """
+
+        if not self.config.ai_enabled:
+            return {"status": "disabled"}
+        if self.config.ai_provider in {"openai-compatible", "gemini"} and not self.api_key:
+            return {"status": "error", "error": "AI API Key 未配置"}
+        if not batches:
+            return {"status": "ok", "scores": {}}
+
+        lines = []
+        for ticker, headlines in batches.items():
+            joined = "\n".join(f"  - {title}" for title in headlines[:8])
+            lines.append(f"{ticker}:\n{joined}")
+        prompt = (
+            "为每个标的的新闻打分。只依据给出的标题，不要引入外部信息。\n\n"
+            + "\n\n".join(lines)
+            + "\n\n返回单个 JSON 对象，键是标的代码，值形如："
+            + '{"score": -1.0..1.0, "label": "Bearish|Somewhat-Bearish|Neutral|Somewhat-Bullish|Bullish", '
+            + '"driver": "一句话说明最关键的那条消息"}\n'
+            "规则：例行报道、榜单、ETF 持仓变动一律 Neutral；"
+            "只有实质业绩、指引、监管、并购、产能等消息才能偏离中性。"
+        )
+        system = (
+            "你是美股新闻分析员。你只依据提供的标题判断，"
+            "对没有实质信息的标题给出 Neutral 且不编造理由。"
+        )
+        try:
+            if self.config.ai_provider in {"openai-compatible", "gemini"}:
+                raw, _ = self._openai_compatible(system + "\n\n" + prompt)
+            elif self.config.ai_provider == "ollama":
+                raw, _ = self._ollama(system + "\n\n" + prompt)
+            else:
+                raw, _ = self._codex_cli(prompt)
+            parsed = self._parse_json(raw)
+        except Exception as error:
+            return {"status": "error", "error": self._safe_error(error)}
+        if not isinstance(parsed, dict):
+            return {"status": "error", "error": "模型未返回 JSON 对象"}
+        return {"status": "ok", "scores": parsed}
+
     def test_connection(self) -> Dict[str, Any]:
         """Perform a real, minimal provider call with no market decision attached."""
 

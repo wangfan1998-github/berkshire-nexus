@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 from ..agent.cycle import PaperTradingAgent
 from ..core.orchestrator import ComprehensiveAnalysisReport, OmniAlphaOrchestrator
 from ..learning.registry import ChampionChallengerRegistry
-from ..data.attention import AttentionService
+from ..data.attention import AttentionService, NewsSentiment
 from ..data.screener import MarketScreener, segment_catalogue
 from ..research.briefing import BriefingComposer
 from ..research.ai import AIResearchService
@@ -27,6 +27,15 @@ from ..trading.binance_stocks import (
 from ..trading.live import LiveBroker
 from ..trading.planner import AllocationPlanner
 from ..trading.risk import DeterministicRiskEngine, RiskPolicy
+
+
+def _clamp_score(value: Any) -> float:
+    """Model output is untrusted; clamp into the documented -1..1 range."""
+
+    try:
+        return max(-1.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def json_safe(value: Any) -> Any:
@@ -560,6 +569,8 @@ class DesktopService:
 
         # Social attention + news sentiment. Free sources; failures degrade the
         # briefing rather than failing it.
+        ai_service = AIResearchService(config, ai_api_key) if config.ai_enabled else None
+
         # Free-tier news is 25 requests/day, well under one run over ~20 names.
         # Spend it on holdings and the strongest candidates; an AVOID name never
         # produces an order, so its news cannot change a decision today.
@@ -577,11 +588,49 @@ class DesktopService:
             cache_dir=self.state_directory,
         )
         attention = service.collect(tickers, include_news=False)
-        for ticker in news_targets:
-            if service.news_client.configured:
+
+        # Primary sentiment path: keyless Google News headlines scored by the
+        # configured model in one batched call. This covers every ticker on every
+        # run, where Alpha Vantage's 25/day free quota covered only ~5.
+        headlines = service.headlines(news_targets)
+        if ai_service is not None and any(headlines.values()):
+            batches = {
+                ticker: [row["title"] for row in rows]
+                for ticker, rows in headlines.items() if rows
+            }
+            scored = ai_service.score_headlines(batches)
+            if scored.get("status") == "ok":
+                for ticker, value in (scored.get("scores") or {}).items():
+                    key = str(ticker).upper()
+                    if key not in batches:
+                        continue
+                    rows = headlines.get(key, [])
+                    attention.sentiment[key] = NewsSentiment(
+                        ticker=key,
+                        article_count=len(rows),
+                        score=_clamp_score(value.get("score")),
+                        label=str(value.get("label") or ""),
+                        top_headlines=[
+                            {"title": row["title"], "source": row.get("source", ""),
+                             "url": row.get("url", ""), "label": ""}
+                            for row in rows[:5]
+                        ],
+                        available=True,
+                    )
+                    driver = str(value.get("driver") or "")[:200]
+                    if driver:
+                        attention.sentiment[key].top_headlines.insert(
+                            0, {"title": f"关键驱动：{driver}", "source": "AI", "url": "", "label": ""}
+                        )
+            elif scored.get("error"):
+                attention.errors["headline-scoring"] = str(scored["error"])[:200]
+
+        # Alpha Vantage as a supplement where the quota still allows, since its
+        # relevance weighting is richer than a headline-only judgement.
+        for ticker in news_targets[:6]:
+            if service.news_client.configured and ticker not in attention.sentiment:
                 attention.sentiment[ticker] = service.news_client.fetch(ticker)
 
-        ai_service = AIResearchService(config, ai_api_key) if config.ai_enabled else None
         briefing = BriefingComposer(ai_service).compose(
             reports=reports,
             screened=screened,

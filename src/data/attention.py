@@ -30,6 +30,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ElementTree
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +39,12 @@ from typing import Any, Dict, List, Optional, Sequence
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 APEWISDOM_URL = "https://apewisdom.io/api/v1.0/filter/{filter}/page/{page}"
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
+# Keyless and unquota'd. Verified live: 100 items for a single ticker versus
+# Alpha Vantage's 25 requests *per day* for the whole app.
+GOOGLE_NEWS_RSS = (
+    "https://news.google.com/rss/search"
+    "?q={query}&hl=en-US&gl=US&ceid=US:en"
+)
 
 # Mention counts are heavily skewed (NVDA ~780 vs a typical name in single
 # digits), so "crowded" is defined by rank and velocity rather than raw volume.
@@ -173,6 +180,48 @@ class ApeWisdomClient:
             if page >= _as_int(payload.get("pages"), self.pages):
                 break
         return entries
+
+
+class GoogleNewsClient:
+    """Keyless headline feed. No quota, so it can cover every ticker every run.
+
+    Returns headlines only — scoring is done separately, either by Alpha Vantage
+    (when its quota allows) or by the configured LLM. Deliberately not FinBERT:
+    that needs torch/transformers (~2GB), and this project is standard-library
+    only at runtime so the desktop bundle needs no pip step.
+    """
+
+    name = "google-news-rss"
+
+    def __init__(self, timeout: int = 20, limit: int = 25):
+        self.timeout = timeout
+        self.limit = max(1, int(limit))
+
+    def fetch(self, ticker: str, company: str = "") -> List[Dict[str, str]]:
+        # Including "stock" keeps a bare ticker from matching unrelated acronyms.
+        query = f"{ticker} stock" if not company else f"{ticker} {company} stock"
+        url = GOOGLE_NEWS_RSS.format(query=urllib.parse.quote(query))
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+        try:
+            root = ElementTree.fromstring(raw)
+        except ElementTree.ParseError:
+            return []
+        items: List[Dict[str, str]] = []
+        for node in root.iter("item"):
+            title = (node.findtext("title") or "").strip()
+            if not title:
+                continue
+            items.append({
+                "title": title[:220],
+                "url": (node.findtext("link") or "").strip(),
+                "published": (node.findtext("pubDate") or "").strip(),
+                "source": (node.findtext("source") or "").strip(),
+            })
+            if len(items) >= self.limit:
+                break
+        return items
 
 
 class AlphaVantageNewsClient:
@@ -318,6 +367,8 @@ class AlphaVantageNewsClient:
 class AttentionService:
     """Combines social buzz and news sentiment for a set of tickers."""
 
+    _headline_errors: Dict[str, str] = {}
+
     def __init__(
         self,
         *,
@@ -325,11 +376,29 @@ class AttentionService:
         buzz_pages: int = 3,
         news_budget: int = 20,
         cache_dir: Optional[Path] = None,
+        headline_limit: int = 8,
     ):
         self.buzz_client = ApeWisdomClient(pages=buzz_pages)
         self.news_client = AlphaVantageNewsClient(
             alpha_vantage_key, cache_dir=cache_dir, daily_budget=news_budget
         )
+        # Keyless and unquota'd, so it covers every ticker on every run.
+        self.headline_client = GoogleNewsClient(limit=headline_limit)
+
+    def headlines(self, tickers: Sequence[str]) -> Dict[str, List[Dict[str, str]]]:
+        """Headlines for every ticker. No quota, so nothing is left out."""
+
+        out: Dict[str, List[Dict[str, str]]] = {}
+        for ticker in tickers:
+            symbol = str(ticker).upper().strip()
+            if not symbol:
+                continue
+            try:
+                out[symbol] = self.headline_client.fetch(symbol)
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as error:
+                out[symbol] = []
+                self._headline_errors[symbol] = str(error)[:120]
+        return out
 
     def collect(
         self,
