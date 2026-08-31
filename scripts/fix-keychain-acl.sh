@@ -6,9 +6,16 @@
 # a stable certificate, but the old ACLs do not know about it — which is why
 # macOS prompts once per entry on every launch.
 #
-# This reads each value once (you will be asked to allow that), then rewrites it
-# with the current app explicitly in the ACL. Because the signing identity is now
-# stable, the grant survives future rebuilds — this only needs running once.
+# Why the ACL goes stale: it stores a code-signing *digest*, not a path. Every
+# ad-hoc build produced a new digest, so each rebuild appended another entry that
+# no longer verified — the installed copy had accumulated 14 dead entries
+# (status -2147415734, errSecCSSignatureNotVerifiable), and macOS prompted once
+# per entry on every launch.
+#
+# This reads each value once, then rewrites it with the current app in the ACL,
+# which also discards the dead entries. The signing identity is now stable, so
+# the grant survives future rebuilds — verified by rebuilding and reinstalling
+# with no new prompt. Run once.
 set -euo pipefail
 
 SERVICE="com.berkshire.nexus"
