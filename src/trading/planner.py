@@ -30,6 +30,11 @@ class PlanningPolicy:
     max_portfolio_invested_pct: float = 80.0
     global_position_cap_pct: float = 10.0
     minimum_rebalance_notional: float = 25.0
+    # Largest single order the planner will emit. Applies to BUY and SELL alike:
+    # the risk engine exempts sells from its cap because selling reduces
+    # exposure, which is right for a safety check but leaves nothing able to
+    # bound a sell's size. Trimming here keeps a small-size test meaningful.
+    max_order_notional: float = 10_000.0
     analysis_weight: float = 0.70
     learned_weight: float = 0.30
     limit_buffer_bps: float = 10.0
@@ -107,6 +112,10 @@ class AllocationPlanner:
                 continue
             side = "BUY" if difference > 0.0 else "SELL"
             notional = abs(difference)
+            # Trim to the per-order ceiling before sizing. Rebalancing toward a
+            # target is inherently incremental, so a capped order simply moves
+            # part of the way and the next cycle continues.
+            notional = min(notional, self.policy.max_order_notional)
             quantity = round(notional / price, 6)
             if side == "SELL":
                 # Rounding to 6dp can land above the real holding, which has more
@@ -120,6 +129,10 @@ class AllocationPlanner:
                 if quantity <= 0.0:
                     continue
                 notional = quantity * price
+            # Trimming can land under the exchange/portfolio minimum, which would
+            # be rejected downstream. Drop it here with a reason instead.
+            if notional < self.policy.minimum_rebalance_notional:
+                continue
             buffer = self.policy.limit_buffer_bps / 10_000.0
             limit_price = round(price * (1.0 + buffer if side == "BUY" else 1.0 - buffer), 2)
             intents.append(OrderIntent(

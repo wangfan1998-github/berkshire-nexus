@@ -29,7 +29,7 @@ from ..trading.binance_stocks import (
     quote_spread_pct,
 )
 from ..trading.live import LiveBroker
-from ..trading.planner import AllocationPlanner
+from ..trading.planner import AllocationPlanner, PlanningPolicy
 from ..trading.risk import DeterministicRiskEngine, RiskPolicy
 
 
@@ -1008,7 +1008,18 @@ class DesktopService:
             )
 
         policy = self._risk_policy(risk_config or {})
-        planner = AllocationPlanner()
+        # The planner sizes orders; the risk engine only accepts or rejects them.
+        # Constructed with defaults it ignored the operator's caps entirely, so a
+        # $10 single-order limit could not shrink a $72 sell — the sell simply
+        # bypassed the cap (SELL is risk-reducing) and went out at full size.
+        # Sizing limits belong here, where they can trim rather than reject.
+        planner = AllocationPlanner(PlanningPolicy(
+            minimum_score=policy.minimum_analysis_score,
+            global_position_cap_pct=policy.max_position_pct,
+            max_cycle_turnover_pct=policy.max_daily_turnover_pct,
+            minimum_rebalance_notional=policy.minimum_order_notional,
+            max_order_notional=policy.max_single_order_notional,
+        ))
         engine = DeterministicRiskEngine(policy)
 
         orders = planner.plan(reports, portfolio, None)
