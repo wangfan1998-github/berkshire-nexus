@@ -260,6 +260,15 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 
 .muted-note { margin: 10px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .warn-note { margin: 10px 0 0; padding: 9px 11px; color: var(--amber); font-size: 10px; line-height: 1.6; background: var(--amber-soft); border-left: 2px solid var(--amber); }
+/* Paragraphs inside a note carry the note's own spacing, so they must not add
+   their own margins on top of it. */
+.cash-plan-line { margin: 0; }
+.cash-plan-line + .cash-plan-line { margin-top: 4px; }
+/* The redeem button is a block control inside a text note: give it real
+   vertical separation and align the caveat to its middle rather than letting
+   both sit on the text baseline. */
+.cash-plan-action { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
+.cash-plan-action > span { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .reject-reason { color: var(--risk); font-size: 9px; line-height: 1.5; }
 
 .live-exec-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: end; margin-top: 6px; }

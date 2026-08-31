@@ -976,6 +976,11 @@ function StrategyPage({
   }, [joined, syncedFrom]);
   const acknowledged = confirmation.trim() === LIVE_ACKNOWLEDGEMENT;
   const approved = cycle?.risk_decisions.filter((item) => item.approved) ?? [];
+  // Rejected orders never reach the exchange, so the button must count only what
+  // will actually be sent. Saying "5 笔" while 3 buys sit rejected below reads as
+  // a bug even though the 5 sells are correct.
+  const approvedBuys = approved.filter((item) => item.order.side === "BUY").length;
+  const approvedSells = approved.length - approvedBuys;
   // Only rows that actually move, so the table stays about the change.
   const allocDelta = (() => {
     const alloc = cycle?.allocation;
@@ -1093,6 +1098,15 @@ function StrategyPage({
               提交 {approved.length > 0 ? `${approved.length} 笔` : ""}真实订单
             </button>
           </div>
+          {approved.length > 0 && (
+            <p className="muted-note">
+              将提交 {approvedSells} 笔卖出
+              {approvedBuys > 0 ? ` + ${approvedBuys} 笔买入` : ""}；
+              未通过风控的 {(cycle?.risk_decisions.length ?? 0) - approved.length} 笔不会下单。
+              {approvedBuys === 0 && cycle?.cash_plan && cycle.cash_plan.shortfall > 0 &&
+                "买入全部因现金不足被拒，赎回理财后重新预览即可恢复。"}
+            </p>
+          )}
         </div>
         {confirmation.trim().length > 0 && !acknowledged && (
           <p className="warn-note">确认短语不匹配，必须与 {LIVE_ACKNOWLEDGEMENT} 完全一致。</p>
@@ -1114,47 +1128,45 @@ function StrategyPage({
           </div>
           {cycle.cash_plan && cycle.cash_plan.needed_for_buys > 0 && (
             <div className={cycle.cash_plan.shortfall > 0 ? "warn-note" : "muted-note"}>
-              <strong>买入资金</strong>：需要 {money.format(cycle.cash_plan.needed_for_buys)}，
-              当前可用 {money.format(cycle.cash_plan.spendable_usdc)} USDC
-              （CARD {money.format(cycle.cash_plan.card_usdc)} · MAIN {money.format(cycle.cash_plan.main_usdc)}）
-              {cycle.cash_plan.in_earn_usdc > 0.01 && `，理财中 ${money.format(cycle.cash_plan.in_earn_usdc)}`}
+              <p className="cash-plan-line">
+                <strong>买入资金</strong>：需要 {money.format(cycle.cash_plan.needed_for_buys)}，
+                当前可用 {money.format(cycle.cash_plan.spendable_usdc)} USDC
+                （CARD {money.format(cycle.cash_plan.card_usdc)} · MAIN {money.format(cycle.cash_plan.main_usdc)}）
+                {cycle.cash_plan.in_earn_usdc > 0.01 && `，理财中 ${money.format(cycle.cash_plan.in_earn_usdc)}`}
+                {cycle.cash_plan.shortfall > 0 && (
+                  <>，<strong>缺口 {money.format(cycle.cash_plan.shortfall)}</strong></>
+                )}
+              </p>
               {cycle.cash_plan.shortfall > 0 && (
-                <>
-                  ，<strong>缺口 {money.format(cycle.cash_plan.shortfall)}</strong>
-                  <br />{cycle.cash_plan.advice}
-                  {/* Earn can cover it, so offer the redemption instead of
-                      leaving the operator to do it in the Binance app. */}
-                  {cycle.cash_plan.earn_product_id &&
-                    cycle.cash_plan.in_earn_usdc >= cycle.cash_plan.shortfall && (
-                      <>
-                        <br />
-                        <button
-                          className="secondary-button"
-                          disabled={blocked(busy, "reconcile") || !acknowledged}
-                          onClick={() =>
-                            void onRedeemEarn(
-                              cycle.cash_plan!.earn_product_id,
-                              cycle.cash_plan!.shortfall,
-                              confirmation.trim(),
-                            )
-                          }
-                        >
-                          {busy === "reconcile" ? (
-                            <LoaderCircle className="spin" size={15} />
-                          ) : (
-                            <WalletCards size={15} />
-                          )}
-                          赎回 {money.format(cycle.cash_plan.shortfall)} 到 CARD
-                        </button>
-                        {!acknowledged && (
-                          <span className="muted-note">
-                            　赎回会动用真实资金，需先填写上方确认短语
-                          </span>
-                        )}
-                      </>
-                    )}
-                </>
+                <p className="cash-plan-line">{cycle.cash_plan.advice}</p>
               )}
+              {/* Earn can cover it, so offer the redemption instead of leaving
+                  the operator to do it in the Binance app. */}
+              {cycle.cash_plan.shortfall > 0 &&
+                cycle.cash_plan.earn_product_id &&
+                cycle.cash_plan.in_earn_usdc >= cycle.cash_plan.shortfall && (
+                  <div className="cash-plan-action">
+                    <button
+                      className="secondary-button"
+                      disabled={blocked(busy, "reconcile") || !acknowledged}
+                      onClick={() =>
+                        void onRedeemEarn(
+                          cycle.cash_plan!.earn_product_id,
+                          cycle.cash_plan!.shortfall,
+                          confirmation.trim(),
+                        )
+                      }
+                    >
+                      {busy === "reconcile" ? (
+                        <LoaderCircle className="spin" size={15} />
+                      ) : (
+                        <WalletCards size={15} />
+                      )}
+                      赎回 {money.format(cycle.cash_plan.shortfall)} 到 CARD
+                    </button>
+                    {!acknowledged && <span>赎回会动用真实资金，需先填写上方确认短语</span>}
+                  </div>
+                )}
             </div>
           )}
           {cycle.dropped_orders && cycle.dropped_orders.length > 0 && (
