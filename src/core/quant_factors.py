@@ -15,6 +15,10 @@ class QuantFactorBreakdown:
     momentum_score: float # 0 to 100 (Trend strength, price action)
     risk_adjusted_score: float # 0 to 100 (Beta penalty, stability)
     composite_alpha_score: float # 0 to 100 Final Multi-Factor Score
+    # Business-quality only: quality/growth/risk, with value and momentum
+    # removed. The orchestrator scores valuation and timing as their own layers,
+    # so folding them in here too would count the same evidence twice.
+    business_quality_score: float = 0.0
     factor_strengths: List[str] = field(default_factory=list)
     factor_weaknesses: List[str] = field(default_factory=list)
     # Why momentum scored what it did (52-week position, chase penalty, ...).
@@ -129,6 +133,16 @@ class QuantFactorModel:
             1
         )
 
+        # Business quality in isolation, for the orchestrator's layered score.
+        # Value belongs to the valuation layer and momentum to the timing layer,
+        # so both are excluded here and the remaining weights (.25/.25/.10) are
+        # renormalised to sum to 1. Without this the composite drags valuation
+        # and momentum into the quality layer and double-counts them.
+        business_quality = round(
+            (quality * 0.25 + growth * 0.25 + risk_score * 0.10) / 0.60,
+            1
+        )
+
         strengths = []
         weaknesses = []
 
@@ -160,6 +174,7 @@ class QuantFactorModel:
             momentum_notes=momentum_notes,
             risk_adjusted_score=risk_score,
             composite_alpha_score=composite,
+            business_quality_score=business_quality,
             factor_strengths=strengths,
             factor_weaknesses=weaknesses
         )

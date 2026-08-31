@@ -62,6 +62,14 @@ def main() -> None:
     cancel_all = subparsers.add_parser("live-cancel-all")
     cancel_all.add_argument("--symbol", default="")
 
+    # Redeeming savings moves money, so it takes the same acknowledgement as an
+    # order. Amount is optional; omitting it with --all redeems the position.
+    redeem = subparsers.add_parser("live-redeem-earn")
+    redeem.add_argument("--product-id", required=True)
+    redeem.add_argument("--amount", type=float, default=None)
+    redeem.add_argument("--all", dest="redeem_all", action="store_true")
+    redeem.add_argument("--confirmation", default="")
+
     live_cycle = subparsers.add_parser("live-cycle")
     live_cycle.add_argument("tickers", nargs="+")
     live_cycle.add_argument("--risk-config-json", default="{}")
@@ -132,6 +140,15 @@ def main() -> None:
                 binance_key,
                 binance_secret,
                 args.symbol or None,
+            )
+        elif args.command == "live-redeem-earn":
+            value = service.live_redeem_earn(
+                binance_key,
+                binance_secret,
+                product_id=args.product_id,
+                amount=args.amount,
+                redeem_all=args.redeem_all,
+                confirmation=args.confirmation,
             )
         elif args.command == "live-cycle":
             value = service.run_live_cycle(

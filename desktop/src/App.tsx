@@ -55,7 +55,6 @@ type BusyAction =
   | "save"
   | "key"
   | "ai-key"
-  | "alpha-key"
   | "ai-test"
   | "preflight"
   | "promote"
@@ -243,13 +242,12 @@ const TASK_LABEL: Record<string, string> = {
   key: "保存 Key",
   secret: "保存 Secret",
   "ai-key": "保存 Token",
-  "alpha-key": "保存 Key",
 };
 
 /** Actions that must not overlap: they mutate credentials, orders or state. */
 const EXCLUSIVE: ReadonlySet<string> = new Set([
   "boot", "live-submit", "reconcile", "disclaimer",
-  "key", "secret", "ai-key", "alpha-key",
+  "key", "secret", "ai-key",
 ]);
 
 /**
@@ -945,6 +943,7 @@ function StrategyPage({
   onSubmit,
   onReconcile,
   onCancelAll,
+  onRedeemEarn,
   goTo,
 }: {
   settings: DesktopSettings;
@@ -959,6 +958,7 @@ function StrategyPage({
   onSubmit: (confirmation: string) => Promise<void>;
   onReconcile: () => Promise<void>;
   onCancelAll: () => Promise<void>;
+  onRedeemEarn: (productId: string, shortfall: number, confirmation: string) => Promise<void>;
   goTo: (page: PageId) => void;
 }) {
   const [confirmation, setConfirmation] = useState("");
@@ -1122,6 +1122,37 @@ function StrategyPage({
                 <>
                   ，<strong>缺口 {money.format(cycle.cash_plan.shortfall)}</strong>
                   <br />{cycle.cash_plan.advice}
+                  {/* Earn can cover it, so offer the redemption instead of
+                      leaving the operator to do it in the Binance app. */}
+                  {cycle.cash_plan.earn_product_id &&
+                    cycle.cash_plan.in_earn_usdc >= cycle.cash_plan.shortfall && (
+                      <>
+                        <br />
+                        <button
+                          className="secondary-button"
+                          disabled={blocked(busy, "reconcile") || !acknowledged}
+                          onClick={() =>
+                            void onRedeemEarn(
+                              cycle.cash_plan!.earn_product_id,
+                              cycle.cash_plan!.shortfall,
+                              confirmation.trim(),
+                            )
+                          }
+                        >
+                          {busy === "reconcile" ? (
+                            <LoaderCircle className="spin" size={15} />
+                          ) : (
+                            <WalletCards size={15} />
+                          )}
+                          赎回 {money.format(cycle.cash_plan.shortfall)} 到 CARD
+                        </button>
+                        {!acknowledged && (
+                          <span className="muted-note">
+                            　赎回会动用真实资金，需先填写上方确认短语
+                          </span>
+                        )}
+                      </>
+                    )}
                 </>
               )}
             </div>
@@ -1216,7 +1247,6 @@ function SettingsPage({
   keyConfigured,
   secretConfigured,
   aiConfigured,
-  alphaConfigured,
   check,
   busy,
   onSettings,
@@ -1227,8 +1257,6 @@ function SettingsPage({
   onDeleteSecret,
   onSaveAIKey,
   onDeleteAIKey,
-  onSaveAlphaKey,
-  onDeleteAlphaKey,
   onVerify,
   onTestAI,
   onAcceptDisclaimer,
@@ -1237,7 +1265,6 @@ function SettingsPage({
   keyConfigured: boolean;
   secretConfigured: boolean;
   aiConfigured: boolean;
-  alphaConfigured: boolean;
   check: CredentialCheck | null;
   busy: BusyAction;
   onSettings: (next: DesktopSettings) => void;
@@ -1248,8 +1275,6 @@ function SettingsPage({
   onDeleteSecret: () => Promise<void>;
   onSaveAIKey: (value: string) => Promise<void>;
   onDeleteAIKey: () => Promise<void>;
-  onSaveAlphaKey: (value: string) => Promise<void>;
-  onDeleteAlphaKey: () => Promise<void>;
   onVerify: () => Promise<void>;
   onTestAI: () => Promise<void>;
   onAcceptDisclaimer: () => Promise<void>;
@@ -1257,7 +1282,6 @@ function SettingsPage({
   const [key, setKey] = useState("");
   const [secret, setSecret] = useState("");
   const [aiKey, setAIKey] = useState("");
-  const [avKey, setAVKey] = useState("");
   const research = settings.research;
   const preset = research.ai_provider === "gemini" ? AI_PRESETS.gemini : AI_PRESETS.gateway;
 
@@ -1387,22 +1411,11 @@ function SettingsPage({
             <span>启用 AI 综合</span>
           </label>
 
-          <SectionHeading index="03" title="情绪数据源" note="Reddit 关注度免费无需 Key；新闻情绪需要 Alpha Vantage 免费 Key（25 次/天）。" />
-          <label className="field-label">
-            <span>ALPHAVANTAGE_API_KEY（可选）</span>
-            <div className="secret-input">
-              <KeyRound size={16} />
-              <input type="password" value={avKey} onChange={(event) => setAVKey(event.target.value)} placeholder={alphaConfigured ? "输入新 Key 可替换" : "粘贴免费 Key"} autoComplete="off" spellCheck={false} />
-            </div>
-          </label>
-          <div className="button-row">
-            <button className="primary-button" disabled={busy !== null || avKey.trim().length < 8} onClick={() => void onSaveAlphaKey(avKey).then(() => setAVKey("")).catch(() => undefined)}>
-              {busy === "alpha-key" ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}存 Key
-            </button>
-            {alphaConfigured && <button className="danger-text-button" disabled={busy !== null} onClick={() => void onDeleteAlphaKey()}><Trash2 size={15} />删除</button>}
-            <a className="external-link" href="https://www.alphavantage.co/support/#api-key" target="_blank" rel="noreferrer">领取免费 Key <ArrowUpRight size={13} /></a>
-          </div>
-          <p className="muted-note">未配置时日报仍可用，只是没有新闻情绪分；Reddit 关注度不受影响。</p>
+          <SectionHeading index="03" title="情绪数据源" note="全部免费无需 Key：Reddit 关注度取自 ApeWisdom，新闻情绪由 Google News 头条交给上方配置的模型打分。" />
+          <p className="muted-note">
+            新闻情绪覆盖每个分析标的，并计入综合分的时效层。原先的 Alpha Vantage 免费额度为 25 次/天，
+            不足以覆盖一次完整扫描，已于 2026-08-31 移除。
+          </p>
         </section>
       </div>
 
@@ -1453,7 +1466,6 @@ export default function App() {
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [secretConfigured, setSecretConfigured] = useState(false);
   const [aiKeyConfigured, setAIKeyConfigured] = useState(false);
-  const [alphaKeyConfigured, setAlphaKeyConfigured] = useState(false);
   const [busy, setBusy] = useState<BusyAction>("boot");
   const [toast, setToast] = useState<Toast | null>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -1500,19 +1512,17 @@ export default function App() {
     let alive = true;
     const boot = async () => {
       try {
-        const [nextSettings, hasKey, hasSecret, hasAI, hasAlpha] = await Promise.all([
+        const [nextSettings, hasKey, hasSecret, hasAI] = await Promise.all([
           desktopBridge.loadSettings(),
           desktopBridge.keyStatus(),
           desktopBridge.secretStatus(),
           desktopBridge.aiKeyStatus(),
-          desktopBridge.alphaVantageKeyStatus(),
         ]);
         if (!alive) return;
         setSettings(nextSettings);
         setKeyConfigured(hasKey);
         setSecretConfigured(hasSecret);
         setAIKeyConfigured(hasAI);
-        setAlphaKeyConfigured(hasAlpha);
         if (hasKey && hasSecret) await loadAccount(true);
       } catch (error) {
         if (alive) notify("error", `初始化失败：${asError(error)}`);
@@ -1627,6 +1637,28 @@ export default function App() {
     }
   };
 
+  /**
+   * Redeem exactly the shortfall from Simple Earn into CARD.
+   *
+   * Binance does not auto-redeem, so an Earn balance can never fund a BUY —
+   * without this the cycle just reports "现金不足" with no way to act on it.
+   * A small buffer is added because redemption and the order are separate
+   * requests and the price can tick up between them.
+   */
+  const redeemEarn = async (productId: string, shortfall: number, confirmation: string) => {
+    setBusy("reconcile");
+    try {
+      const amount = Math.ceil((shortfall + 1) * 100) / 100;
+      await desktopBridge.liveRedeemEarn({ productId, amount, redeemAll: false, confirmation });
+      notify("success", `已请求赎回 ${amount.toFixed(2)} USDC，到账后请重新预览`);
+      await loadAccount(true);
+    } catch (error) {
+      notify("error", `赎回失败：${asError(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const testAI = async () => {
     setBusy("ai-test");
     try {
@@ -1688,6 +1720,7 @@ export default function App() {
             onSubmit={(confirmation) => runCycle(confirmation, true)}
             onReconcile={reconcile}
             onCancelAll={cancelAll}
+            onRedeemEarn={redeemEarn}
             goTo={setPage}
           />
         );
@@ -1698,7 +1731,6 @@ export default function App() {
             keyConfigured={keyConfigured}
             secretConfigured={secretConfigured}
             aiConfigured={aiKeyConfigured}
-            alphaConfigured={alphaKeyConfigured}
             check={credentialCheck}
             busy={busy}
             onSettings={setSettings}
@@ -1709,8 +1741,6 @@ export default function App() {
             onDeleteSecret={async () => { setBusy("secret"); try { await desktopBridge.deleteSecret(); setSecretConfigured(false); setAccount(null); notify("success", "Secret 已删除"); } catch (error) { notify("error", asError(error)); } finally { setBusy(null); } }}
             onSaveAIKey={async (value) => { setBusy("ai-key"); try { await desktopBridge.saveAIKey(value); setAIKeyConfigured(true); notify("success", "AI Token 已存入钥匙串"); } catch (error) { notify("error", asError(error)); throw error; } finally { setBusy(null); } }}
             onDeleteAIKey={async () => { setBusy("ai-key"); try { await desktopBridge.deleteAIKey(); setAIKeyConfigured(false); notify("success", "AI Token 已删除"); } catch (error) { notify("error", asError(error)); } finally { setBusy(null); } }}
-            onSaveAlphaKey={async (value) => { setBusy("alpha-key"); try { await desktopBridge.saveAlphaVantageKey(value); setAlphaKeyConfigured(true); notify("success", "Alpha Vantage Key 已存入钥匙串"); } catch (error) { notify("error", asError(error)); throw error; } finally { setBusy(null); } }}
-            onDeleteAlphaKey={async () => { setBusy("alpha-key"); try { await desktopBridge.deleteAlphaVantageKey(); setAlphaKeyConfigured(false); notify("success", "Alpha Vantage Key 已删除"); } catch (error) { notify("error", asError(error)); } finally { setBusy(null); } }}
             onVerify={verify}
             onTestAI={testAI}
             onAcceptDisclaimer={acceptDisclaimer}
@@ -1718,7 +1748,7 @@ export default function App() {
         );
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, account, briefing, cycle, settings, busy, elapsed, ready, keyConfigured, secretConfigured, aiKeyConfigured, alphaKeyConfigured, credentialCheck]);
+  }, [page, account, briefing, cycle, settings, busy, elapsed, ready, keyConfigured, secretConfigured, aiKeyConfigured, credentialCheck]);
 
   return (
     <div className="app-shell">

@@ -611,42 +611,29 @@ class DesktopService:
                 prices[ticker] = price
 
         config = ResearchConfig.from_dict(research_config or {})
-        reports = OmniAlphaOrchestrator(
-            config, ai_api_key, venue_prices=prices
-        ).compare_multiple(tickers)
-
-        account: Dict[str, Any] = {}
-        if api_secret:
-            try:
-                account = self.live_account(api_key, api_secret)
-            except (BinanceAPIError, ValueError):
-                account = {}
-
-        # Social attention + news sentiment. Free sources; failures degrade the
-        # briefing rather than failing it.
         ai_service = AIResearchService(config, ai_api_key) if config.ai_enabled else None
 
-        # Free-tier news is 25 requests/day, well under one run over ~20 names.
-        # Spend it on holdings and the strongest candidates; an AVOID name never
-        # produces an order, so its news cannot change a decision today.
-        ranked = sorted(reports, key=lambda item: item.final_composite_score, reverse=True)
-        news_targets: List[str] = list(held_now)
-        for report in ranked:
-            ticker = report.financials.ticker
-            if ticker not in news_targets:
-                news_targets.append(ticker)
-            if len(news_targets) >= 12:
-                break
-
-        service = AttentionService(
-            alpha_vantage_key=os.environ.get("ALPHAVANTAGE_API_KEY", ""),
-            cache_dir=self.state_directory,
-        )
+        # Social attention + news sentiment, computed BEFORE analysis.
+        #
+        # Sentiment is an input to the timing layer of the composite score, so it
+        # has to exist before the orchestrator runs. Previously the reports were
+        # built first and sentiment was scored afterwards, which made it
+        # structurally impossible to feed news into the score no matter what
+        # weight the orchestrator assigned it.
+        #
+        # Free sources; failures degrade the briefing rather than failing it.
+        service = AttentionService(cache_dir=self.state_directory)
         attention = service.collect(tickers, include_news=False)
 
-        # Primary sentiment path: keyless Google News headlines scored by the
-        # configured model in one batched call. This covers every ticker on every
-        # run, where Alpha Vantage's 25/day free quota covered only ~5.
+        # Google News RSS is keyless and unquota'd, so every analysed ticker gets
+        # headlines. Holdings lead because their news can change a TRIM call.
+        news_targets: List[str] = list(held_now)
+        for ticker in tickers:
+            if ticker not in news_targets:
+                news_targets.append(ticker)
+
+        # Per-ticker sentiment in -1..1, fed into the orchestrator's timing layer.
+        sentiment_scores: Dict[str, float] = {}
         headlines = service.headlines(news_targets)
         if ai_service is not None and any(headlines.values()):
             batches = {
@@ -660,10 +647,12 @@ class DesktopService:
                     if key not in batches:
                         continue
                     rows = headlines.get(key, [])
+                    score = _clamp_score(value.get("score"))
+                    sentiment_scores[key] = score
                     attention.sentiment[key] = NewsSentiment(
                         ticker=key,
                         article_count=len(rows),
-                        score=_clamp_score(value.get("score")),
+                        score=score,
                         label=str(value.get("label") or ""),
                         top_headlines=[
                             {"title": row["title"], "source": row.get("source", ""),
@@ -680,11 +669,19 @@ class DesktopService:
             elif scored.get("error"):
                 attention.errors["headline-scoring"] = str(scored["error"])[:200]
 
-        # Alpha Vantage as a supplement where the quota still allows, since its
-        # relevance weighting is richer than a headline-only judgement.
-        for ticker in news_targets[:6]:
-            if service.news_client.configured and ticker not in attention.sentiment:
-                attention.sentiment[ticker] = service.news_client.fetch(ticker)
+        reports = OmniAlphaOrchestrator(
+            config,
+            ai_api_key,
+            venue_prices=prices,
+            news_sentiment=sentiment_scores,
+        ).compare_multiple(tickers)
+
+        account: Dict[str, Any] = {}
+        if api_secret:
+            try:
+                account = self.live_account(api_key, api_secret)
+            except (BinanceAPIError, ValueError):
+                account = {}
 
         briefing = BriefingComposer(ai_service).compose(
             reports=reports,
@@ -879,19 +876,38 @@ class DesktopService:
         amount: Optional[float] = None,
         redeem_all: bool = False,
         destination: str = "FUND",
+        confirmation: str = "",
     ) -> Dict[str, Any]:
-        """Redeem savings into a spendable wallet. Gated like other mutations."""
+        """Redeem savings into a spendable wallet. Gated like other mutations.
 
+        Destination is FUND (the CARD wallet) because that is what a stock BUY
+        debits; redeeming to SPOT would leave the cash unspendable by the order
+        path and the shortfall would persist.
+        """
+
+        if confirmation.strip() != LIVE_ACKNOWLEDGEMENT:
+            raise ValueError(
+                f"赎回理财需要确认短语 {LIVE_ACKNOWLEDGEMENT}"
+            )
+        if not redeem_all and not (amount and amount > 0.0):
+            raise ValueError("赎回需要指定金额，或使用 redeem_all 全额赎回")
         client = self._live_client(api_key, api_secret, allow_live_orders=True)
         return json_safe({
             "requested_at_utc": datetime.now(timezone.utc).isoformat(),
             "product_id": product_id,
+            "amount": amount,
+            "redeem_all": redeem_all,
+            "destination": destination,
             "response": client.redeem_flexible(
                 product_id,
                 amount=amount,
                 redeem_all=redeem_all,
                 destination=destination,
             ),
+            # Redemption is asynchronous on Binance's side; the balance can take
+            # a few seconds to appear in CARD, so the caller must re-read rather
+            # than assume the funds are immediately spendable.
+            "note": "赎回已提交，到账后请刷新账户再下单",
         })
 
     def live_reconcile(self, api_key: str, api_secret: str) -> Dict[str, Any]:

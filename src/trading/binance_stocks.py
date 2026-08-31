@@ -731,7 +731,7 @@ class BinanceStocksClient:
         *,
         amount: Optional[float] = None,
         redeem_all: bool = False,
-        destination: str = "SPOT",
+        destination: str = "FUND",
     ) -> Dict[str, Any]:
         """Redeem a Simple Earn flexible position back to a spendable wallet.
 
@@ -740,7 +740,15 @@ class BinanceStocksClient:
         requires an explicit redemption first. Binance does not auto-redeem.
 
         ``destination`` accepts ``SPOT`` or ``FUND`` (funding/CARD wallet).
+        Defaults to ``FUND`` because a stock BUY debits CARD; redeeming to SPOT
+        would leave the cash still unspendable by the order path.
         """
+
+        # Redemption moves real balances, so it passes the same two gates as an
+        # order rather than riding on the read-only client.
+        self._assert_live_enabled()
+        if not self.api_secret:
+            raise ValueError("Binance API secret is required for signed trade endpoints")
 
         params: Dict[str, object] = {
             "productId": product_id,

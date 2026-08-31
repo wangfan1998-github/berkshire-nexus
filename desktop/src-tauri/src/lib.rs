@@ -13,7 +13,6 @@ const KEYRING_SERVICE: &str = "com.berkshire.nexus";
 const BINANCE_KEYRING_ACCOUNT: &str = "binance-api-key";
 const BINANCE_SECRET_KEYRING_ACCOUNT: &str = "binance-api-secret";
 const AI_KEYRING_ACCOUNT: &str = "ai-provider-api-key";
-const ALPHAVANTAGE_KEYRING_ACCOUNT: &str = "alphavantage-api-key";
 // Mirrors LIVE_ACKNOWLEDGEMENT in src/trading/binance_stocks.py. The UI must
 // send this verbatim before any real order is submitted.
 const LIVE_ACKNOWLEDGEMENT: &str = "I_ACKNOWLEDGE_REAL_MONEY";
@@ -357,33 +356,6 @@ fn ai_key_status() -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn save_alphavantage_key(api_key: String) -> Result<Value, String> {
-    let normalized = api_key.trim();
-    if normalized.len() < 8 {
-        return Err("Alpha Vantage API Key 看起来不完整".to_string());
-    }
-    remember_secret(ALPHAVANTAGE_KEYRING_ACCOUNT, normalized);
-    keyring_entry(ALPHAVANTAGE_KEYRING_ACCOUNT)?
-        .set_password(normalized)
-        .map_err(|error| format!("无法保存 Alpha Vantage Key: {error}"))?;
-    Ok(json!({"configured": true}))
-}
-
-#[tauri::command]
-fn delete_alphavantage_key() -> Result<Value, String> {
-    forget_secret(ALPHAVANTAGE_KEYRING_ACCOUNT);
-    match keyring_entry(ALPHAVANTAGE_KEYRING_ACCOUNT)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(json!({"configured": false})),
-        Err(error) => Err(format!("无法删除 Alpha Vantage Key: {error}")),
-    }
-}
-
-#[tauri::command]
-fn alphavantage_key_status() -> Result<Value, String> {
-    Ok(json!({"configured": optional_key(ALPHAVANTAGE_KEYRING_ACCOUNT)?.is_some()}))
-}
-
-#[tauri::command]
 fn save_binance_secret(api_secret: String) -> Result<Value, String> {
     let normalized = api_secret.trim();
     if normalized.len() < 16 {
@@ -485,43 +457,7 @@ async fn daily_briefing(
         arguments.extend(values);
     }
     let ai_key = ai_key_for_config(&research_config, false)?;
-    let alpha_key = optional_key(ALPHAVANTAGE_KEYRING_ACCOUNT)?;
-    run_briefing_command(&app, &arguments, &key, &secret, ai_key.as_deref(), alpha_key.as_deref())
-}
-
-/// Briefing needs one more credential than the generic runner carries.
-fn run_briefing_command(
-    app: &AppHandle,
-    arguments: &[String],
-    binance_key: &str,
-    binance_secret: &str,
-    ai_key: Option<&str>,
-    alphavantage_key: Option<&str>,
-) -> Result<Value, String> {
-    let (mut command, _) = command_base(app)?;
-    command.args(arguments);
-    command.env("BINANCE_API_KEY", binance_key);
-    command.env("BINANCE_API_SECRET", binance_secret);
-    if let Some(value) = ai_key {
-        command.env("BERKSHIRE_NEXUS_AI_API_KEY", value);
-    }
-    if let Some(value) = alphavantage_key {
-        command.env("ALPHAVANTAGE_API_KEY", value);
-    }
-    let output = command
-        .output()
-        .map_err(|error| format!("Could not start the Python engine: {error}"))?;
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr);
-        let sanitized = message.trim().replace('\n', " ");
-        return Err(if sanitized.is_empty() {
-            "The Python engine returned an error without details".to_string()
-        } else {
-            sanitized
-        });
-    }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("The Python engine returned invalid JSON: {error}"))
+    run_json_command_full(&app, &arguments, Some(&key), Some(&secret), ai_key.as_deref(), false)
 }
 
 #[tauri::command]
@@ -637,6 +573,47 @@ async fn run_live_cycle(
         ai_key.as_deref(),
         submit && acknowledged,
     )
+}
+
+/// Redeem Simple Earn savings into the CARD wallet so a BUY can be funded.
+///
+/// Binance does not auto-redeem, so an Earn balance cannot pay for an order.
+/// This moves real money, so it takes the same confirmation phrase as a live
+/// cycle rather than the lighter gate used by cancel-all.
+#[tauri::command]
+async fn live_redeem_earn(
+    app: AppHandle,
+    product_id: String,
+    amount: Option<f64>,
+    redeem_all: bool,
+    confirmation: String,
+) -> Result<Value, String> {
+    if confirmation.trim() != LIVE_ACKNOWLEDGEMENT {
+        return Err(format!(
+            "Redeeming savings requires the confirmation phrase {LIVE_ACKNOWLEDGEMENT}"
+        ));
+    }
+    if product_id.trim().is_empty() {
+        return Err("A Simple Earn product id is required to redeem".to_string());
+    }
+    if !redeem_all && !amount.is_some_and(|value| value > 0.0) {
+        return Err("Specify an amount to redeem, or redeem the whole position".to_string());
+    }
+    let (key, secret) = binance_credentials()?;
+    let mut arguments = vec![
+        "live-redeem-earn".to_string(),
+        "--product-id".to_string(),
+        product_id.trim().to_string(),
+        "--confirmation".to_string(),
+        confirmation.trim().to_string(),
+    ];
+    if redeem_all {
+        arguments.push("--all".to_string());
+    } else if let Some(value) = amount {
+        arguments.push("--amount".to_string());
+        arguments.push(value.to_string());
+    }
+    run_json_command_full(&app, &arguments, Some(&key), Some(&secret), None, true)
 }
 
 #[tauri::command]
@@ -835,9 +812,6 @@ pub fn run() {
             delete_ai_key,
             ai_key_status,
             test_ai_provider,
-            save_alphavantage_key,
-            delete_alphavantage_key,
-            alphavantage_key_status,
             save_binance_secret,
             delete_binance_secret,
             binance_secret_status,
@@ -848,6 +822,7 @@ pub fn run() {
             live_reconcile,
             live_accept_disclaimer,
             live_cancel_all,
+            live_redeem_earn,
             run_live_cycle,
             start_agent,
             stop_agent,

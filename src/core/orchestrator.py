@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -16,6 +17,50 @@ from .risk_manager import RiskManager, RiskAssessment
 from ..research.ai import AIResearchResult, AIResearchService
 from ..research.config import ResearchConfig
 from ..research.news import NewsResult, NewsService
+
+
+# Layer weights. Quality is the largest single block but no longer a majority,
+# so a good business at a bad price cannot coast through on pedigree alone.
+QUALITY_WEIGHT = 0.45
+VALUATION_WEIGHT = 0.30
+TIMING_WEIGHT = 0.25
+
+
+def _valuation_score(margin_of_safety_pct: float, reliable: bool = True) -> float:
+    """Map margin of safety onto 0-100 with usable resolution in the middle.
+
+    The previous mapping was ``50 + mos * 1.5`` clamped to 10-95, which saturated
+    almost immediately: on 12 live holdings, 8 pinned to a bound and the factor
+    degenerated into a two-state switch. A DCF routinely produces margins beyond
+    ±50%, so a linear ramp cannot also resolve the ±20% band where the actual
+    decisions are made.
+
+    tanh compresses the tails instead of clipping them, so ordering is preserved
+    out at the edges. The scale is set from the observed distribution: measured
+    across 10 AI-chain names the DCF spans -173% to +63%, and a /35 scale still
+    pinned 4 of 10 against a bound. /60 pins none of the interior names while
+    keeping the ±20% decision band ~29 points wide, which is enough resolution
+    to rank two similarly-priced candidates.
+    """
+
+    if not reliable:
+        # An unreliable valuation (typically an ETF, which has no issuer
+        # fundamentals) must not read as attractively cheap.
+        return 50.0
+    scaled = math.tanh(margin_of_safety_pct / 60.0)
+    return round(50.0 + scaled * 45.0, 2)
+
+
+def _timing_score(momentum_score: float, news_sentiment: float) -> float:
+    """Blend price momentum with news sentiment into the fast-moving layer.
+
+    News previously carried zero weight — it was fetched, displayed, and ignored
+    by the score. It is the only input that changes intraday on a day with no
+    price move, so it belongs here.
+    """
+
+    sentiment_scaled = 50.0 + max(-1.0, min(1.0, news_sentiment)) * 40.0
+    return momentum_score * 0.6 + sentiment_scaled * 0.4
 
 
 @dataclass
@@ -42,6 +87,7 @@ class OmniAlphaOrchestrator:
         research_config: Optional[ResearchConfig] = None,
         ai_api_key: str = "",
         venue_prices: Optional[Dict[str, float]] = None,
+        news_sentiment: Optional[Dict[str, float]] = None,
     ):
         self.research_config = research_config or ResearchConfig()
         self.fetcher = DataFetcher()
@@ -49,6 +95,11 @@ class OmniAlphaOrchestrator:
         # price an order will actually fill at: Binance's tokenized-equity quote
         # has diverged from the third-party close by ~8% intraday, which would
         # otherwise make margin-of-safety describe a price nobody can trade.
+        # Per-ticker news sentiment in -1..1, supplied by the caller because it
+        # is batched across the whole shortlist in one model call.
+        self.news_sentiment = {
+            str(k).upper(): float(v) for k, v in (news_sentiment or {}).items()
+        }
         self.venue_prices = {
             str(k).upper(): float(v) for k, v in (venue_prices or {}).items() if float(v) > 0.0
         }
@@ -93,24 +144,47 @@ class OmniAlphaOrchestrator:
         val = self.valuation_engine.evaluate(fin)
         quant = self.quant_model.evaluate(fin)
         risk = self.risk_manager.assess(fin, chokepoint, val, quant)
+        news_sentiment = self.news_sentiment.get(fin.ticker.upper(), 0.0)
 
-        # 3. Calculate Final Composite Score (0-100)
-        # Weights:
-        # - Chokepoint Level & Score: 25% (Serenity)
-        # - Masters Consensus: 25% (Berkshire)
-        # - Valuation Margin of Safety: 25% (Value-Investing-Agent)
-        # - Quant Multi-Factor: 25% (Qlib)
+        # 3. Final composite score, in three layers rather than four equal parts.
+        #
+        # Measured across 10 AI-chain names, the engines are not independent:
+        #   masters vs qlib       +0.97
+        #   chokepoint vs qlib    +0.72
+        #   chokepoint vs masters +0.70
+        #   valuation vs masters  +0.04
+        # The first three all answer "is this a good business" from the same
+        # margin/ROE inputs, so equal weights gave quality an effective 75% while
+        # valuation — the only uncorrelated signal — got 25%. Grouping them into
+        # one QUALITY layer stops the same evidence being counted three times.
+        #
+        # The layers also separate slow from fast: quality moves quarterly with
+        # filings, while valuation and timing move daily. Under the old weights
+        # only momentum varied day to day, at 15% of 25% = 3.75%, which is why
+        # the briefing barely changed between runs.
         choke_scaled = chokepoint.overall_score * 10.0
         masters_scaled = debate.consensus_score * 20.0
-        val_scaled = min(max(50.0 + (val.margin_of_safety_pct * 1.5), 10.0), 95.0)
-        quant_scaled = quant.composite_alpha_score
+        # Business quality only. The full composite bundles value and momentum,
+        # which are scored as their own layers below; using it here would count
+        # valuation twice and momentum twice.
+        quant_scaled = quant.business_quality_score
+        val_scaled = _valuation_score(val.margin_of_safety_pct, val.is_reliable)
+
+        # masters and qlib correlate at +0.97 — they are effectively one signal,
+        # so they share a single third rather than taking a third each. Otherwise
+        # the same margin/ROE reading lands in the score twice under two names.
+        quality_layer = (
+            choke_scaled * 0.50
+            + masters_scaled * 0.25
+            + quant_scaled * 0.25
+        )
+        timing_layer = _timing_score(quant.momentum_score, news_sentiment)
 
         final_score = round(
-            choke_scaled * 0.25 +
-            masters_scaled * 0.25 +
-            val_scaled * 0.25 +
-            quant_scaled * 0.25,
-            1
+            quality_layer * QUALITY_WEIGHT
+            + val_scaled * VALUATION_WEIGHT
+            + timing_layer * TIMING_WEIGHT,
+            1,
         )
 
         if final_score >= 80.0:

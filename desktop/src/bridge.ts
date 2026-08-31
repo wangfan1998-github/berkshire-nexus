@@ -182,24 +182,6 @@ export const desktopBridge = {
     throw new Error("浏览器预览无法访问系统钥匙串；请在 Tauri 桌面 App 中生成日报。");
   },
 
-  async alphaVantageKeyStatus(): Promise<boolean> {
-    if (isTauri) {
-      const value = await invoke<{ configured: boolean }>("alphavantage_key_status");
-      return value.configured;
-    }
-    return false;
-  },
-
-  async saveAlphaVantageKey(apiKey: string): Promise<void> {
-    if (isTauri) await invoke("save_alphavantage_key", { apiKey });
-    else await wait();
-  },
-
-  async deleteAlphaVantageKey(): Promise<void> {
-    if (isTauri) await invoke("delete_alphavantage_key");
-    else await wait();
-  },
-
   async screenMarket(perSegment = 6): Promise<ScreenResult> {
     if (isTauri) return invoke<ScreenResult>("screen_market", { perSegment });
     await wait(700);
@@ -228,6 +210,29 @@ export const desktopBridge = {
     if (isTauri) return invoke<Record<string, unknown>>("live_cancel_all", { symbol });
     await wait(600);
     throw new Error("浏览器预览无法撤单；请在 Tauri 桌面 App 中运行。");
+  },
+
+  /**
+   * Redeem Simple Earn savings into CARD so a BUY can be funded.
+   * Binance never auto-redeems, so this is the only way an Earn balance
+   * becomes spendable. Gated by the same phrase as a live cycle.
+   */
+  async liveRedeemEarn(options: {
+    productId: string;
+    amount?: number;
+    redeemAll: boolean;
+    confirmation: string;
+  }): Promise<Record<string, unknown>> {
+    if (isTauri) {
+      return invoke<Record<string, unknown>>("live_redeem_earn", {
+        productId: options.productId,
+        amount: options.amount,
+        redeemAll: options.redeemAll,
+        confirmation: options.confirmation,
+      });
+    }
+    await wait(600);
+    throw new Error("浏览器预览无法赎回理财；请在 Tauri 桌面 App 中运行。");
   },
 
   /**

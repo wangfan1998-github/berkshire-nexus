@@ -1,6 +1,6 @@
 """Social attention and news sentiment.
 
-Two sources, both verified live and both free:
+Two sources, both verified live and both free and keyless:
 
 * **ApeWisdom** — ``https://apewisdom.io/api/v1.0/filter/{filter}/page/{n}``
   Reddit-derived mention counts across ~960 tickers. No key, no registration,
@@ -8,10 +8,14 @@ Two sources, both verified live and both free:
   JSON). Returns ``rank, ticker, name, mentions, upvotes, rank_24h_ago,
   mentions_24h_ago`` — volume only, no bull/bear score.
 
-* **Alpha Vantage NEWS_SENTIMENT** — relevance-weighted per-ticker sentiment
-  scores. Free key, 25 requests/day, so results are cached per ticker per day.
+* **Google News RSS** — keyless, unquota'd headlines for any ticker. Scoring is
+  done by the configured LLM in one batched call, which is what turns headlines
+  into the -1..1 sentiment the composite score consumes.
 
-Deliberately NOT used: the X/Twitter API (no free read tier since Feb 2026,
+Deliberately NOT used: **Alpha Vantage NEWS_SENTIMENT** — removed 2026-08-31.
+Its free tier is 25 requests/day against a ~20-name shortlist run several times
+a day, so it covered at most a handful of tickers and then failed silently for
+the rest of the day. Also the X/Twitter API (no free read tier since Feb 2026,
 $5/1,000 posts, Basic closed to new signups) and any X scraper (X Corp sent
 cease-and-desist letters over Nitter on 2026-08-24; that repo is now archived
 and its instances are down). StockTwits returns 403 to datacenter IPs.
@@ -25,8 +29,6 @@ enthusiasm is treated as a crowding warning, never as a reason to buy.
 from __future__ import annotations
 
 import json
-import os
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -38,9 +40,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 APEWISDOM_URL = "https://apewisdom.io/api/v1.0/filter/{filter}/page/{page}"
-ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
-# Keyless and unquota'd. Verified live: 100 items for a single ticker versus
-# Alpha Vantage's 25 requests *per day* for the whole app.
+# Keyless and unquota'd, which is why it replaced Alpha Vantage entirely.
 GOOGLE_NEWS_RSS = (
     "https://news.google.com/rss/search"
     "?q={query}&hl=en-US&gl=US&ceid=US:en"
@@ -97,7 +97,7 @@ class BuzzEntry:
 class NewsSentiment:
     ticker: str
     article_count: int = 0
-    # Relevance-weighted mean of per-ticker scores, in Alpha Vantage's -1..1 space.
+    # Sentiment in -1..1, produced by the configured model from headlines.
     score: float = 0.0
     label: str = ""
     bullish_articles: int = 0
@@ -129,7 +129,12 @@ class AttentionResult:
 
 
 def _label_for(score: float) -> str:
-    """Alpha Vantage's documented bands, applied to the weighted mean."""
+    """Map a -1..1 sentiment score onto a coarse label.
+
+    The bands are Alpha Vantage's, kept after that provider was removed because
+    the model is prompted to emit the same vocabulary, so a model-supplied label
+    and a derived one stay comparable.
+    """
 
     if score <= -0.35:
         return "Bearish"
@@ -224,146 +229,6 @@ class GoogleNewsClient:
         return items
 
 
-class AlphaVantageNewsClient:
-    """Per-ticker news sentiment. Free tier allows 25 requests/day.
-
-    Responses are cached to disk for the trading day, because the daily quota is
-    smaller than a single briefing run over a 20-name shortlist.
-    """
-
-    def __init__(
-        self,
-        api_key: str = "",
-        *,
-        timeout: int = 25,
-        cache_dir: Optional[Path] = None,
-        daily_budget: int = 20,
-    ):
-        self.api_key = api_key or os.environ.get("ALPHAVANTAGE_API_KEY", "").strip()
-        self.timeout = timeout
-        self.cache_dir = Path(cache_dir) if cache_dir else Path(os.environ.get("TMPDIR", "/tmp"))
-        self.daily_budget = max(0, int(daily_budget))
-        self._spent = 0
-
-    @property
-    def configured(self) -> bool:
-        return bool(self.api_key)
-
-    def _cache_path(self, ticker: str) -> Path:
-        day = datetime.now(timezone.utc).date().isoformat()
-        return self.cache_dir / f"berkshire-nexus-news-{day}-{ticker.upper()}.json"
-
-    def fetch(self, ticker: str) -> NewsSentiment:
-        symbol = ticker.upper().strip()
-        if not self.configured:
-            return NewsSentiment(ticker=symbol, error="ALPHAVANTAGE_API_KEY 未配置")
-
-        cached = self._read_cache(symbol)
-        if cached is not None:
-            return cached
-
-        if self._spent >= self.daily_budget:
-            return NewsSentiment(ticker=symbol, error="已达当日请求预算上限")
-
-        params = urllib.parse.urlencode({
-            "function": "NEWS_SENTIMENT",
-            "tickers": symbol,
-            "apikey": self.api_key,
-            "limit": 50,
-        })
-        request = urllib.request.Request(
-            f"{ALPHA_VANTAGE_URL}?{params}",
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                payload = json.loads(response.read().decode("utf-8") or "{}")
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as error:
-            return NewsSentiment(ticker=symbol, error=str(error)[:200])
-        finally:
-            self._spent += 1
-
-        # Alpha Vantage signals quota and key problems with an Information/Note
-        # field and HTTP 200, so a successful status is not enough.
-        for key in ("Information", "Note", "Error Message"):
-            if key in payload:
-                return NewsSentiment(ticker=symbol, error=str(payload[key])[:200])
-
-        result = self._parse(symbol, payload)
-        self._write_cache(symbol, result)
-        return result
-
-    @staticmethod
-    def _parse(symbol: str, payload: Dict[str, Any]) -> NewsSentiment:
-        feed = payload.get("feed") or []
-        weighted_sum = 0.0
-        weight_total = 0.0
-        bullish = 0
-        bearish = 0
-        headlines: List[Dict[str, Any]] = []
-
-        for item in feed:
-            if not isinstance(item, dict):
-                continue
-            for row in item.get("ticker_sentiment") or []:
-                if str(row.get("ticker") or "").upper() != symbol:
-                    continue
-                relevance = _as_float(row.get("relevance_score"))
-                score = _as_float(row.get("ticker_sentiment_score"))
-                # Relevance-weighted: a passing mention should not move the mean
-                # as much as an article about the company.
-                weighted_sum += score * relevance
-                weight_total += relevance
-                label = str(row.get("ticker_sentiment_label") or "")
-                if "Bullish" in label:
-                    bullish += 1
-                elif "Bearish" in label:
-                    bearish += 1
-                if len(headlines) < 5:
-                    headlines.append({
-                        "title": str(item.get("title") or "")[:200],
-                        "source": str(item.get("source") or ""),
-                        "url": str(item.get("url") or ""),
-                        "time_published": str(item.get("time_published") or ""),
-                        "relevance": round(relevance, 3),
-                        "sentiment": round(score, 3),
-                        "label": label,
-                    })
-                break
-
-        mean = (weighted_sum / weight_total) if weight_total > 0 else 0.0
-        return NewsSentiment(
-            ticker=symbol,
-            article_count=len(feed),
-            score=round(mean, 4),
-            label=_label_for(mean),
-            bullish_articles=bullish,
-            bearish_articles=bearish,
-            top_headlines=headlines,
-            available=bool(feed),
-        )
-
-    def _read_cache(self, symbol: str) -> Optional[NewsSentiment]:
-        path = self._cache_path(symbol)
-        try:
-            if not path.exists():
-                return None
-            with path.open("r", encoding="utf-8") as handle:
-                return NewsSentiment(**json.load(handle))
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            return None
-
-    def _write_cache(self, symbol: str, value: NewsSentiment) -> None:
-        try:
-            path = self._cache_path(symbol)
-            temporary = path.with_suffix(".tmp")
-            with temporary.open("w", encoding="utf-8") as handle:
-                json.dump(value.to_dict(), handle, ensure_ascii=False)
-            temporary.replace(path)
-        except OSError:
-            pass
-
-
 class AttentionService:
     """Combines social buzz and news sentiment for a set of tickers."""
 
@@ -372,16 +237,11 @@ class AttentionService:
     def __init__(
         self,
         *,
-        alpha_vantage_key: str = "",
         buzz_pages: int = 3,
-        news_budget: int = 20,
         cache_dir: Optional[Path] = None,
         headline_limit: int = 8,
     ):
         self.buzz_client = ApeWisdomClient(pages=buzz_pages)
-        self.news_client = AlphaVantageNewsClient(
-            alpha_vantage_key, cache_dir=cache_dir, daily_budget=news_budget
-        )
         # Keyless and unquota'd, so it covers every ticker on every run.
         self.headline_client = GoogleNewsClient(limit=headline_limit)
 
@@ -404,8 +264,15 @@ class AttentionService:
         self,
         tickers: Sequence[str],
         *,
-        include_news: bool = True,
+        include_news: bool = False,
     ) -> AttentionResult:
+        """Social buzz for the requested names.
+
+        ``include_news`` is retained only for call-site compatibility and is
+        ignored: sentiment now comes from Google News headlines scored by the
+        configured model, which the caller drives via :meth:`headlines`.
+        """
+
         result = AttentionResult(fetched_at_utc=datetime.now(timezone.utc).isoformat())
         wanted = [str(value).upper().strip() for value in tickers if str(value).strip()]
 
@@ -417,15 +284,6 @@ class AttentionService:
             result.buzz = {t: all_buzz[t] for t in wanted if t in all_buzz}
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as error:
             result.errors["apewisdom"] = str(error)[:200]
-
-        if include_news and self.news_client.configured:
-            for ticker in wanted:
-                sentiment = self.news_client.fetch(ticker)
-                result.sentiment[ticker] = sentiment
-                if sentiment.error and "apikey" not in sentiment.error.lower():
-                    result.errors.setdefault("alphavantage", sentiment.error)
-        elif include_news:
-            result.errors["alphavantage"] = "ALPHAVANTAGE_API_KEY 未配置"
 
         return result
 
@@ -461,14 +319,5 @@ def _as_int(value: Any, default: int = 0) -> int:
         if value is None or value == "":
             return default
         return int(float(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _as_float(value: Any, default: float = 0.0) -> float:
-    try:
-        if value is None or value == "":
-            return default
-        return float(value)
     except (TypeError, ValueError):
         return default
