@@ -116,7 +116,17 @@ class AllocationPlanner:
             # target is inherently incremental, so a capped order simply moves
             # part of the way and the next cycle continues.
             notional = min(notional, self.policy.max_order_notional)
-            quantity = round(notional / price, 6)
+            # Size against the LIMIT price, not the reference price. The limit is
+            # the price the order is actually worth at, and it sits a buffer away
+            # from the reference: quantity derived from the reference made a $5.00
+            # sell settle at 5.00 * 0.999 = $4.995, under Binance's $5 minNotional
+            # (486419), while a $5.00 buy needed 5.00 * 1.001 = $5.005 and failed
+            # on a $5.00 balance (486405). Both rejections came from this gap.
+            buffer = self.policy.limit_buffer_bps / 10_000.0
+            limit_price = round(price * (1.0 + buffer if side == "BUY" else 1.0 - buffer), 2)
+            if limit_price <= 0.0:
+                continue
+            quantity = round(notional / limit_price, 6)
             if side == "SELL":
                 # Rounding to 6dp can land above the real holding, which has more
                 # precision (held 1.0718605 -> planned 1.071861, i.e. 5e-7 too
@@ -128,13 +138,23 @@ class AllocationPlanner:
                     quantity = math.floor(held * 1e6) / 1e6
                 if quantity <= 0.0:
                     continue
-                notional = quantity * price
-            # Trimming can land under the exchange/portfolio minimum, which would
-            # be rejected downstream. Drop it here with a reason instead.
+            # Value the order the way the exchange will: quantity x limit price.
+            notional = quantity * limit_price
+            # Rounding quantity down can still leave the order a fraction under
+            # the floor, so nudge it up by one step rather than dropping an order
+            # that was meant to sit exactly at the minimum.
             if notional < self.policy.minimum_rebalance_notional:
-                continue
-            buffer = self.policy.limit_buffer_bps / 10_000.0
-            limit_price = round(price * (1.0 + buffer if side == "BUY" else 1.0 - buffer), 2)
+                needed = math.ceil(
+                    self.policy.minimum_rebalance_notional / limit_price * 1e6
+                ) / 1e6
+                held = float(portfolio.quantities.get(ticker, 0.0))
+                if side == "SELL" and needed > held:
+                    continue
+                if needed * limit_price > self.policy.max_order_notional:
+                    continue
+                quantity = needed
+                notional = quantity * limit_price
+
             intents.append(OrderIntent(
                 client_order_id=f"bn{uuid4().hex}",
                 ticker=ticker,

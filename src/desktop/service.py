@@ -740,7 +740,7 @@ class DesktopService:
         elif in_earn >= shortfall:
             advice = (
                 f"理财中有 {in_earn:.2f} USDC，赎回后即可满足；"
-                "买单扣款钱包是 CARD"
+                "买单会自动从余额充足的钱包（CARD 或 MAIN）扣款"
             )
         elif pending_sales > 0.0:
             advice = (

@@ -798,7 +798,25 @@ class BinanceStocksClient:
         params["quoteAsset"] = quote_asset
         if order.side == "BUY":
             # walletType applies to BUY only; SELL always settles to CARD.
-            params["walletType"] = (getattr(order, "wallet_type", "") or "CARD").upper()
+            #
+            # Pick the wallet that actually holds the money rather than trusting
+            # the CARD default. Redeeming Simple Earn can land the cash in either
+            # wallet depending on destAccount, and a buy against the wrong one
+            # fails with 486405 "Insufficient balance" while the balance is
+            # plainly visible in the other. Only override when the requested
+            # wallet cannot cover the order and the alternative can.
+            wallet = (getattr(order, "wallet_type", "") or "CARD").upper()
+            needed = float(order.notional or 0.0)
+            if needed > 0.0:
+                try:
+                    if self.spendable_balance(quote_asset, wallet) < needed:
+                        other = "MAIN" if wallet == "CARD" else "CARD"
+                        if self.spendable_balance(quote_asset, other) >= needed:
+                            wallet = other
+                except (BinanceAPIError, ValueError):
+                    # Balance lookup is an optimisation; let the exchange decide.
+                    pass
+            params["walletType"] = wallet
         if self.send_tokenize_flag:
             params["tokenize"] = "false"
         if order.order_type == "LIMIT":

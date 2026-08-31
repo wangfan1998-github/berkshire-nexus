@@ -13,7 +13,7 @@ from src.trading.binance_stocks import (
     LiveTradingDisabledError,
 )
 from src.trading.paper import PaperBroker
-from src.trading.planner import AllocationPlanner
+from src.trading.planner import AllocationPlanner, PlanningPolicy
 from src.trading.risk import DeterministicRiskEngine, RiskPolicy
 from src.trading.types import OrderIntent, PortfolioSnapshot
 
@@ -149,7 +149,39 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(orders[0].side, "SELL")
         # Held 1000 of 10000 equity -> 10%; retain half -> 5%.
         self.assertAlmostEqual(orders[0].target_weight, 0.05, places=4)
-        self.assertAlmostEqual(orders[0].quantity, 5.0, places=3)
+        # Quantity is derived from the LIMIT price, not the reference: selling
+        # $500 at 100.00 * (1 - 10bps) = 99.90 takes 5.005005 shares. Sizing off
+        # the reference gave 5.0, whose real value is 5.0 * 99.90 = $499.50 —
+        # a 0.1% shortfall that pushed a minimum-size order under Binance's
+        # $5 minNotional and rejected it.
+        self.assertAlmostEqual(orders[0].limit_price, 99.90, places=2)
+        self.assertAlmostEqual(orders[0].quantity, 5.005005, places=5)
+        # What matters downstream is that the order is worth what was intended.
+        self.assertAlmostEqual(orders[0].quantity * orders[0].limit_price, 500.0, places=2)
+
+    def test_minimum_size_order_clears_the_exchange_floor(self):
+        """A $5 order must be worth >= $5 at its own limit price.
+
+        Binance rejects equity orders under a $5 minNotional (486419). Sizing a
+        minimum order off the reference price produced 5.00 * 0.999 = $4.995 and
+        every small sell was rejected; the buy side failed the mirror case,
+        needing 5.00 * 1.001 = $5.005 against a $5.00 balance (486405).
+        """
+
+        policy = PlanningPolicy(minimum_rebalance_notional=5.0, max_order_notional=10.0)
+        portfolio = PortfolioSnapshot(
+            cash=5_000.0,
+            quantities={"AAPL": 10.0},
+            prices={"AAPL": 100.0},
+            start_of_day_equity=10_000.0,
+            trading_date="2026-08-26",
+        )
+        orders = AllocationPlanner(policy).plan([self.report(51.0)], portfolio)
+        self.assertTrue(orders)
+        for order in orders:
+            value = order.quantity * order.limit_price
+            self.assertGreaterEqual(round(value, 2), 5.0)
+            self.assertLessEqual(round(value, 2), 10.0)
 
     def test_cycle_turnover_is_capped(self):
         """One cycle cannot reshuffle the whole book."""
