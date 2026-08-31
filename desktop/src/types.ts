@@ -252,6 +252,7 @@ export interface LivePosition {
   cost_complete?: boolean;
   spread_pct?: number;
   price_source?: string;
+  market_phase?: string;
   price_unreliable?: boolean;
   cost_covered_quantity?: number;
   wallet_assets?: string[];

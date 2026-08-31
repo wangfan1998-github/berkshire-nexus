@@ -627,6 +627,9 @@ function Dashboard({
                     <td>{known ? plain.format(position.average_cost ?? 0) : "—"}</td>
                     <td>
                       {position.price ? plain.format(position.price) : "—"}
+                      {position.price_source === "binance-stream" && position.market_phase && (
+                        <span className="phase-tag" title="Binance 实时成交价">{position.market_phase}</span>
+                      )}
                       {position.price_source === "market-close" && (
                         <span className="spread-flag" title={`Binance 盘后买卖价差 ${position.spread_pct?.toFixed(2)}%，已改用交易所收盘价`}>*</span>
                       )}
@@ -647,6 +650,12 @@ function Dashboard({
               })}
             </tbody>
           </table>
+        )}
+        {account.positions.some((p) => p.price_source === "binance-stream") && (
+          <p className="muted-note">
+            带盘口阶段标记的标的使用 Binance 实时成交价。行情流按符号轮播推送，
+            未覆盖到的标的先用其他来源，多刷新几次会逐步补全。
+          </p>
         )}
         {account.positions.some((p) => p.price_source === "market-close") && (
           <p className="muted-note">

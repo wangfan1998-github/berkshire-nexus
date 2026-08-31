@@ -399,3 +399,4 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .donut-side { flex: 1; min-width: 260px; }
 .metric-row.compact > div { padding: 10px 12px; }
 .spread-flag { margin-left: 3px; color: var(--amber); font-weight: 600; cursor: help; }
+.phase-tag { margin-left: 4px; padding: 0 4px; color: var(--green-dark); font-size: 8px; background: var(--green-soft); border-radius: 2px; }

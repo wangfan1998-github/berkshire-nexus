@@ -15,6 +15,7 @@ from ..core.orchestrator import ComprehensiveAnalysisReport, OmniAlphaOrchestrat
 from ..learning.registry import ChampionChallengerRegistry
 from ..data.attention import AttentionService, NewsSentiment
 from ..data.fetcher import DataFetcher
+from ..data.price_stream import EquityPriceStream
 from ..data.screener import MarketScreener, segment_catalogue
 from ..research.briefing import BriefingComposer
 from ..research.ai import AIResearchService
@@ -233,6 +234,7 @@ class DesktopService:
         api_secret: str,
         *,
         cost_lookback_days: int = 120,
+        stream_seconds: float = 12.0,
     ) -> Dict[str, Any]:
         """Authoritative cash, holdings and working orders straight from Binance."""
 
@@ -258,7 +260,19 @@ class DesktopService:
         quote_errors: Dict[str, str] = {}
         spreads: Dict[str, float] = {}
         price_sources: Dict[str, str] = {}
+        phases: Dict[str, str] = {}
         fetcher = DataFetcher()
+
+        # Binance's own traded price, which the REST quote does not expose. The
+        # stream rotates symbols so a single pass sees only a subset; results are
+        # cached across runs and merged.
+        try:
+            stream_prices = EquityPriceStream().refresh_cache(
+                self.state_directory / "stream_prices.json",
+                max_seconds=stream_seconds,
+            )
+        except Exception:
+            stream_prices = {}
         for position in positions:
             ticker = str(position.get("ticker", ""))
             if not ticker:
@@ -271,11 +285,17 @@ class DesktopService:
             except (BinanceAPIError, ValueError) as error:
                 quote_errors[ticker] = str(error)
 
-            # Binance's equity book has no last-traded price, so after hours its
-            # midpoint drifts from the real market — measured 1.33% mean error and
-            # up to 3.9% on thin ETFs. For *valuing* a holding, use the exchange's
-            # actual market price; the venue book still prices orders, where the
-            # spread is what you would really transact against.
+            # Preference order for *valuation*: Binance's own traded price from
+            # the stream, then the exchange market price, then the venue midpoint.
+            # The midpoint is last because it is an estimate — on a thin
+            # pre-market book SMH midded at 585 while the traded price was 566.
+            streamed = stream_prices.get(ticker)
+            if streamed is not None and streamed.price > 0.0:
+                prices[ticker] = streamed.price
+                price_sources[ticker] = "binance-stream"
+                phases[ticker] = streamed.phase_label
+                continue
+
             if spreads.get(ticker, 0.0) > MAX_TRUSTED_SPREAD_PCT:
                 try:
                     market = fetcher.fetch_quote(ticker)
@@ -303,10 +323,11 @@ class DesktopService:
             # A wide book means the price is an estimate, not a quote to trust.
             position["spread_pct"] = spreads.get(ticker, 0.0)
             position["price_source"] = price_sources.get(ticker, "")
+            position["market_phase"] = phases.get(ticker, "")
             # Only flag when we could not improve on a wide venue midpoint.
             position["price_unreliable"] = (
                 spreads.get(ticker, 0.0) > MAX_TRUSTED_SPREAD_PCT
-                and price_sources.get(ticker) != "market-close"
+                and price_sources.get(ticker) not in ("market-close", "binance-stream")
             )
             holdings_value += market_value
 
