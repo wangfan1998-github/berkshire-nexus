@@ -1,48 +1,59 @@
 #!/bin/bash
-# Re-grant keychain access to the signed app.
+# Stop macOS prompting for keychain access on every launch.
 #
-# The credential entries were created while the app was still ad-hoc signed, so
-# their ACLs reference a signing identity that no longer exists. The app now uses
-# a stable certificate, but the old ACLs do not know about it — which is why
-# macOS prompts once per entry on every launch.
+# There are two independent gates on a keychain item, and both must allow the app:
 #
-# Why the ACL goes stale: it stores a code-signing *digest*, not a path. Every
-# ad-hoc build produced a new digest, so each rebuild appended another entry that
-# no longer verified — the installed copy had accumulated 14 dead entries
-# (status -2147415734, errSecCSSignatureNotVerifiable), and macOS prompted once
-# per entry on every launch.
+#   1. The ACL application list — which binaries may read the item. Handled by
+#      `-T` when the item is written.
+#   2. The partition list (macOS Sierra and later) — a second check that is NOT
+#      set by `-T` and can only be changed by supplying the login password.
+#      Until it names the signing identity, macOS prompts even though the ACL
+#      already allows the app.
 #
-# This reads each value once, then rewrites it with the current app in the ACL,
-# which also discards the dead entries. The signing identity is now stable, so
-# the grant survives future rebuilds — verified by rebuilding and reinstalling
-# with no new prompt. Run once.
-set -euo pipefail
+# Gate 1 was already fixed by re-writing the items. This script fixes gate 2,
+# which is why it needs your password — passing it as `-k` is what authorises
+# the change, and it is used only for that.
+#
+# Both gates key off the signing identity, which is now a stable self-signed
+# certificate, so this survives future rebuilds. Run once.
+set -uo pipefail
 
 SERVICE="com.berkshire.nexus"
-APP="/Applications/BerkshireNexus.app"
 ACCOUNTS=(binance-api-key binance-api-secret ai-provider-api-key alphavantage-api-key)
 
-if [ ! -d "$APP" ]; then
-  echo "找不到 $APP，请先安装 App" >&2
+# Certificate the app is signed with; the partition list is keyed to its hash.
+CERT_SHA=$(security find-certificate -c "BerkshireNexus Local Signing" -Z 2>/dev/null \
+  | awk '/SHA-1 hash/ {print $NF; exit}')
+if [ -z "${CERT_SHA}" ]; then
+  echo "找不到签名证书 BerkshireNexus Local Signing" >&2
   exit 1
 fi
 
-echo "将为以下条目重新授权（每条弹一次「允许」，之后不再弹）："
-printf '  - %s\n' "${ACCOUNTS[@]}"
+read -r -s -p "请输入 macOS 登录密码（仅用于修改钥匙串 partition list）: " PASSWORD
 echo
 
+failed=0
 for account in "${ACCOUNTS[@]}"; do
-  if ! value=$(security find-generic-password -s "$SERVICE" -a "$account" -w 2>/dev/null); then
+  if ! security find-generic-password -s "$SERVICE" -a "$account" >/dev/null 2>&1; then
     echo "  跳过 $account（未配置）"
     continue
   fi
-  security delete-generic-password -s "$SERVICE" -a "$account" >/dev/null 2>&1 || true
-  # -T grants that binary access without a prompt; -U updates in place.
-  security add-generic-password -U -s "$SERVICE" -a "$account" -w "$value" \
-    -T "$APP" -T /usr/bin/security
-  echo "  ✓ $account 已重新授权"
+  if security set-generic-password-partition-list \
+       -s "$SERVICE" -a "$account" \
+       -S "apple-tool:,apple:,teamid:${CERT_SHA}" \
+       -k "$PASSWORD" >/dev/null 2>&1; then
+    echo "  ✓ $account"
+  else
+    echo "  ✗ $account 失败（密码错误？）"
+    failed=1
+  fi
 done
+unset PASSWORD
 
 echo
-echo "完成。下次打开 App 不应再反复弹窗。"
-echo "以后重新构建 App 无需重跑本脚本——签名身份已固定。"
+if [ "$failed" -eq 0 ]; then
+  echo "完成。重新打开 App 应该不再弹窗，之后重新构建也不会。"
+else
+  echo "部分条目未更新，请确认密码后重试。" >&2
+  exit 1
+fi
