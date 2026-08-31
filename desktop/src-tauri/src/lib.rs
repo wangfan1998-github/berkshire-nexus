@@ -3,6 +3,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -221,14 +222,55 @@ async fn promote_model(app: AppHandle) -> Result<Value, String> {
     run_json_command(&app, &["model-promote".to_string()], None, None)
 }
 
+/// Process-lifetime cache of secrets already read from the keychain.
+///
+/// macOS prompts per *unlock*, and a self-signed app cannot avoid that: the
+/// partition list only accepts `apple:`, `apple-tool:`, a 10-character Apple
+/// Team ID, or a cdhash. This certificate has no Team ID (`TeamIdentifier=not
+/// set`) and a cdhash changes on every build, so no partition entry can ever
+/// match — the earlier attempt wrote the certificate SHA-1, which is simply not
+/// a Team ID and was therefore inert.
+///
+/// What is fixable is how *often* we unlock. Reading each secret once per launch
+/// and reusing it turns "a prompt on every operation" into at most one per
+/// secret per launch. Values live only in memory and are dropped on exit.
+static SECRET_CACHE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+fn cached_secret(account: &str) -> Option<String> {
+    let guard = SECRET_CACHE.lock().ok()?;
+    guard.as_ref()?.get(account).cloned()
+}
+
+fn remember_secret(account: &str, value: &str) {
+    if let Ok(mut guard) = SECRET_CACHE.lock() {
+        guard
+            .get_or_insert_with(HashMap::new)
+            .insert(account.to_string(), value.to_string());
+    }
+}
+
+fn forget_secret(account: &str) {
+    if let Ok(mut guard) = SECRET_CACHE.lock() {
+        if let Some(map) = guard.as_mut() {
+            map.remove(account);
+        }
+    }
+}
+
 fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYRING_SERVICE, account)
         .map_err(|error| format!("Could not access the operating system credential store: {error}"))
 }
 
 fn optional_key(account: &str) -> Result<Option<String>, String> {
+    if let Some(value) = cached_secret(account) {
+        return Ok(Some(value));
+    }
     match keyring_entry(account)?.get_password() {
-        Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+        Ok(value) if !value.trim().is_empty() => {
+            remember_secret(account, &value);
+            Ok(Some(value))
+        }
         Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(format!("Could not read credential status: {error}")),
     }
@@ -257,6 +299,7 @@ fn save_binance_key(api_key: String) -> Result<Value, String> {
     if normalized.len() < 16 {
         return Err("The Binance API Key appears incomplete".to_string());
     }
+    remember_secret(BINANCE_KEYRING_ACCOUNT, normalized);
     keyring_entry(BINANCE_KEYRING_ACCOUNT)?
         .set_password(normalized)
         .map_err(|error| format!("Could not save the Binance API Key: {error}"))?;
@@ -265,6 +308,7 @@ fn save_binance_key(api_key: String) -> Result<Value, String> {
 
 #[tauri::command]
 fn delete_binance_key() -> Result<Value, String> {
+    forget_secret(BINANCE_KEYRING_ACCOUNT);
     match keyring_entry(BINANCE_KEYRING_ACCOUNT)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(json!({"configured": false})),
         Err(error) => Err(format!("Could not remove the Binance API Key: {error}")),
@@ -273,23 +317,13 @@ fn delete_binance_key() -> Result<Value, String> {
 
 #[tauri::command]
 fn binance_key_status() -> Result<Value, String> {
-    match keyring_entry(BINANCE_KEYRING_ACCOUNT)?.get_password() {
-        Ok(value) => Ok(json!({"configured": !value.trim().is_empty()})),
-        Err(keyring::Error::NoEntry) => Ok(json!({"configured": false})),
-        Err(error) => Err(format!("Could not read Binance credential status: {error}")),
-    }
+    Ok(json!({"configured": optional_key(BINANCE_KEYRING_ACCOUNT)?.is_some()}))
 }
 
 #[tauri::command]
 async fn binance_preflight(app: AppHandle, tickers: Vec<String>) -> Result<Value, String> {
-    let api_key = keyring_entry(BINANCE_KEYRING_ACCOUNT)?
-        .get_password()
-        .map_err(|error| match error {
-            keyring::Error::NoEntry => {
-                "Configure a Binance API Key before running preflight".to_string()
-            }
-            other => format!("Could not read the Binance API Key: {other}"),
-        })?;
+    let api_key = optional_key(BINANCE_KEYRING_ACCOUNT)?
+        .ok_or_else(|| "Configure a Binance API Key before running preflight".to_string())?;
     let mut arguments = vec!["binance-preflight".to_string()];
     arguments.extend(tickers);
     run_json_command(&app, &arguments, Some(&api_key), None)
@@ -301,6 +335,7 @@ fn save_ai_key(api_key: String) -> Result<Value, String> {
     if normalized.len() < 8 {
         return Err("The AI provider API Key appears incomplete".to_string());
     }
+    remember_secret(AI_KEYRING_ACCOUNT, normalized);
     keyring_entry(AI_KEYRING_ACCOUNT)?
         .set_password(normalized)
         .map_err(|error| format!("Could not save the AI provider API Key: {error}"))?;
@@ -309,6 +344,7 @@ fn save_ai_key(api_key: String) -> Result<Value, String> {
 
 #[tauri::command]
 fn delete_ai_key() -> Result<Value, String> {
+    forget_secret(AI_KEYRING_ACCOUNT);
     match keyring_entry(AI_KEYRING_ACCOUNT)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(json!({"configured": false})),
         Err(error) => Err(format!("Could not remove the AI provider API Key: {error}")),
@@ -326,6 +362,7 @@ fn save_alphavantage_key(api_key: String) -> Result<Value, String> {
     if normalized.len() < 8 {
         return Err("Alpha Vantage API Key 看起来不完整".to_string());
     }
+    remember_secret(ALPHAVANTAGE_KEYRING_ACCOUNT, normalized);
     keyring_entry(ALPHAVANTAGE_KEYRING_ACCOUNT)?
         .set_password(normalized)
         .map_err(|error| format!("无法保存 Alpha Vantage Key: {error}"))?;
@@ -334,6 +371,7 @@ fn save_alphavantage_key(api_key: String) -> Result<Value, String> {
 
 #[tauri::command]
 fn delete_alphavantage_key() -> Result<Value, String> {
+    forget_secret(ALPHAVANTAGE_KEYRING_ACCOUNT);
     match keyring_entry(ALPHAVANTAGE_KEYRING_ACCOUNT)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(json!({"configured": false})),
         Err(error) => Err(format!("无法删除 Alpha Vantage Key: {error}")),
@@ -366,6 +404,7 @@ fn save_binance_secret(api_secret: String) -> Result<Value, String> {
             );
         }
     }
+    remember_secret(BINANCE_SECRET_KEYRING_ACCOUNT, normalized);
     keyring_entry(BINANCE_SECRET_KEYRING_ACCOUNT)?
         .set_password(normalized)
         .map_err(|error| format!("Could not save the Binance API Secret: {error}"))?;
@@ -396,6 +435,7 @@ async fn verify_binance_credentials(app: AppHandle) -> Result<Value, String> {
 
 #[tauri::command]
 fn delete_binance_secret() -> Result<Value, String> {
+    forget_secret(BINANCE_SECRET_KEYRING_ACCOUNT);
     match keyring_entry(BINANCE_SECRET_KEYRING_ACCOUNT)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(json!({"configured": false})),
         Err(error) => Err(format!("Could not remove the Binance API Secret: {error}")),

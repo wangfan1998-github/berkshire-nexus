@@ -1,59 +1,55 @@
 #!/bin/bash
-# Stop macOS prompting for keychain access on every launch.
+# Reduce keychain prompts for the locally-signed app.
 #
-# There are two independent gates on a keychain item, and both must allow the app:
+# What can and cannot be fixed, measured on this machine:
 #
-#   1. The ACL application list — which binaries may read the item. Handled by
-#      `-T` when the item is written.
-#   2. The partition list (macOS Sierra and later) — a second check that is NOT
-#      set by `-T` and can only be changed by supplying the login password.
-#      Until it names the signing identity, macOS prompts even though the ACL
-#      already allows the app.
+#   * ACL application list — fixable, and already correct: each item names
+#     /Applications/BerkshireNexus.app with the requirement
+#     `identifier "com.berkshire.nexus" and certificate leaf = H"a9cdc358..."`,
+#     pinned to the stable signing certificate.
 #
-# Gate 1 was already fixed by re-writing the items. This script fixes gate 2,
-# which is why it needs your password — passing it as `-k` is what authorises
-# the change, and it is used only for that.
+#   * Partition list — NOT fixable for a self-signed build. It accepts only
+#     `apple:`, `apple-tool:`, a 10-character Apple Team ID, or a cdhash. This
+#     certificate has no Team ID (codesign reports `TeamIdentifier=not set`) and
+#     a cdhash changes on every build, so no entry can match. An earlier version
+#     of this script wrote the certificate SHA-1 as a `teamid:`, which is not a
+#     Team ID and was silently inert — that is why the prompts continued.
 #
-# Both gates key off the signing identity, which is now a stable self-signed
-# certificate, so this survives future rebuilds. Run once.
+# So the prompt on first unlock per launch is a property of self-signed code on
+# macOS, not a bug we can configure away. The app now caches each secret in
+# memory after its first read, so it asks at most once per secret per launch
+# instead of once per operation. Only a real Apple Developer ID removes it
+# entirely, by giving the partition list a Team ID to trust.
+#
+# This script still helps after a fresh install or a certificate change: it
+# rewrites each item so its ACL names the current app, clearing dead entries
+# accumulated from earlier ad-hoc builds.
 set -uo pipefail
 
 SERVICE="com.berkshire.nexus"
+APP="/Applications/BerkshireNexus.app"
 ACCOUNTS=(binance-api-key binance-api-secret ai-provider-api-key alphavantage-api-key)
 
-# Certificate the app is signed with; the partition list is keyed to its hash.
-CERT_SHA=$(security find-certificate -c "BerkshireNexus Local Signing" -Z 2>/dev/null \
-  | awk '/SHA-1 hash/ {print $NF; exit}')
-if [ -z "${CERT_SHA}" ]; then
-  echo "找不到签名证书 BerkshireNexus Local Signing" >&2
+if [ ! -d "$APP" ]; then
+  echo "找不到 $APP，请先安装 App" >&2
   exit 1
 fi
 
-read -r -s -p "请输入 macOS 登录密码（仅用于修改钥匙串 partition list）: " PASSWORD
+echo "重写钥匙串条目的 ACL，使其指向当前已签名的 App。"
 echo
 
-failed=0
 for account in "${ACCOUNTS[@]}"; do
-  if ! security find-generic-password -s "$SERVICE" -a "$account" >/dev/null 2>&1; then
+  if ! value=$(security find-generic-password -s "$SERVICE" -a "$account" -w 2>/dev/null); then
     echo "  跳过 $account（未配置）"
     continue
   fi
-  if security set-generic-password-partition-list \
-       -s "$SERVICE" -a "$account" \
-       -S "apple-tool:,apple:,teamid:${CERT_SHA}" \
-       -k "$PASSWORD" >/dev/null 2>&1; then
-    echo "  ✓ $account"
-  else
-    echo "  ✗ $account 失败（密码错误？）"
-    failed=1
-  fi
+  security delete-generic-password -s "$SERVICE" -a "$account" >/dev/null 2>&1
+  security add-generic-password -U -s "$SERVICE" -a "$account" -w "$value" \
+    -T "$APP" -T /usr/bin/security
+  echo "  ✓ $account"
 done
-unset PASSWORD
 
 echo
-if [ "$failed" -eq 0 ]; then
-  echo "完成。重新打开 App 应该不再弹窗，之后重新构建也不会。"
-else
-  echo "部分条目未更新，请确认密码后重试。" >&2
-  exit 1
-fi
+echo "完成。首次启动后每个凭证仍可能弹一次授权——点「始终允许」即可，"
+echo "App 会把已读取的凭证缓存在内存中，本次运行内不再重复询问。"
+echo "彻底免弹窗需要 Apple Developer ID 签名（自签名证书没有 Team ID）。"
