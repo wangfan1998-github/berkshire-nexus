@@ -804,24 +804,46 @@ function BriefingPage({
               {briefing.ideas.map((idea) => (
                 <div className={`idea-card action-${idea.action.toLowerCase()}`} key={idea.ticker}>
                   <button className="idea-head" onClick={() => setExpanded(expanded === idea.ticker ? null : idea.ticker)}>
-                    <div className="idea-title">
-                      <strong className="mono">{idea.ticker}</strong>
-                      <StatusMark tone={ACTION_TONE[idea.action] ?? "neutral"}>{ACTION_LABEL[idea.action] ?? idea.action}</StatusMark>
-                      <span className="muted">{idea.segment_label}</span>
+                    <div className="idea-main">
+                      <div className="idea-id">
+                        <strong className="mono">{idea.ticker}</strong>
+                        <StatusMark tone={ACTION_TONE[idea.action] ?? "neutral"}>{ACTION_LABEL[idea.action] ?? idea.action}</StatusMark>
+                        {idea.buzz_crowded && <span className="crowded-tag" title={idea.buzz_note}>拥挤</span>}
+                      </div>
+                      <span className="idea-segment muted">{idea.segment_label}</span>
                     </div>
-                    <div className="idea-stats">
-                      <span>分 <strong>{idea.score.toFixed(1)}</strong></span>
-                      <span>动量 <strong>{idea.momentum_score.toFixed(1)}</strong></span>
-                      <span className="idea-price">{money.format(idea.price)} <em className={idea.change_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.change_pct)}%</em></span>
-                      {idea.buzz_crowded && <span className="crowded-tag" title={idea.buzz_note}>拥挤</span>}
-                      <span className="idea-cost">
-                        {idea.held_quantity > 0 ? (
-                          <>成本 {money.format(idea.average_cost)} <em className={idea.unrealised_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.unrealised_pct, 1)}%</em></>
-                        ) : <span className="muted">未持仓</span>}
+
+                    {/* Fixed slots, always rendered — a conditional cell used to
+                        shift every column after it. */}
+                    <div className="idea-metrics">
+                      <span className="idea-cell">
+                        <em className="idea-cap">分</em>
+                        <strong>{idea.score.toFixed(1)}</strong>
                       </span>
-                      <Sparkline points={idea.price_history ?? []} low={idea.fifty_two_week_low} high={idea.fifty_two_week_high} width={92} height={26} />
-                      <ChevronRight size={14} className={expanded === idea.ticker ? "rotated" : ""} />
+                      <span className="idea-cell">
+                        <em className="idea-cap">动量</em>
+                        <strong>{idea.momentum_score.toFixed(1)}</strong>
+                      </span>
+                      <span className="idea-cell">
+                        <em className="idea-cap">现价</em>
+                        <strong>
+                          {money.format(idea.price)}
+                          <i className={idea.change_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.change_pct)}%</i>
+                        </strong>
+                      </span>
+                      <span className="idea-cell">
+                        <em className="idea-cap">成本</em>
+                        {idea.held_quantity > 0 ? (
+                          <strong>
+                            {money.format(idea.average_cost)}
+                            <i className={idea.unrealised_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.unrealised_pct, 1)}%</i>
+                          </strong>
+                        ) : <strong className="muted">未持仓</strong>}
+                      </span>
                     </div>
+
+                    <Sparkline points={idea.price_history ?? []} low={idea.fifty_two_week_low} high={idea.fifty_two_week_high} width={92} height={28} />
+                    <ChevronRight size={14} className={`idea-chevron ${expanded === idea.ticker ? "rotated" : ""}`} />
                   </button>
                   {expanded === idea.ticker && (
                     <div className="idea-body">

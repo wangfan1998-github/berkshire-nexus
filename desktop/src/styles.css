@@ -295,14 +295,6 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .idea-card.action-avoid { border-left: 2px solid var(--risk); }
 .idea-card.action-hold { border-left: 2px solid var(--line-dark); }
 
-.idea-head { display: flex; gap: 16px; align-items: center; justify-content: space-between; width: 100%; padding: 13px 16px; text-align: left; background: none; border: 0; cursor: pointer; }
-.idea-head:hover { background: var(--paper-deep); }
-.idea-title { display: flex; gap: 10px; align-items: center; font-size: 12px; }
-.idea-title strong { font-size: 13px; }
-.idea-stats { display: flex; gap: 18px; align-items: center; font-size: 10px; color: var(--muted); white-space: nowrap; }
-.idea-stats strong { color: var(--ink); font-family: var(--mono); }
-.idea-stats em { font-style: normal; font-family: var(--mono); }
-.idea-stats .rotated { transform: rotate(90deg); }
 
 .idea-body { padding: 2px 16px 16px; font-size: 10px; line-height: 1.75; border-top: 1px dashed var(--line); }
 .idea-body p { margin: 10px 0 6px; }
@@ -325,10 +317,6 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .sidebar-status strong { font-size: 10px; color: #f2efe6; }
 .sidebar-status span:last-child { font-size: 9px; color: #9aa19a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-@media (max-width: 1000px) {
-  .idea-head { flex-direction: column; align-items: flex-start; gap: 8px; }
-  .idea-stats { flex-wrap: wrap; gap: 12px; }
-}
 
 /* ── Numeric tables: units in the header, figures right-aligned ─────── */
 .numeric-table td:not(:first-child),
@@ -394,9 +382,49 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .alloc-table tbody tr { cursor: pointer; }
 
 /* Fixed-width columns so idea rows line up; the sparkline sits last. */
-.idea-stats { display: grid; grid-template-columns: 64px 68px 132px auto 168px 92px 14px; gap: 14px; align-items: center; justify-items: end; }
-.idea-price, .idea-cost { white-space: nowrap; }
 .donut-side { flex: 1; min-width: 260px; }
 .metric-row.compact > div { padding: 10px 12px; }
 .spread-flag { margin-left: 3px; color: var(--amber); font-weight: 600; cursor: help; }
 .phase-tag { margin-left: 4px; padding: 0 4px; color: var(--green-dark); font-size: 8px; background: var(--green-soft); border-radius: 2px; }
+
+/* ── Idea row: two lines, fixed metric slots ────────────────────────── */
+/* Every cell renders unconditionally, so an optional tag can no longer push
+   the columns out of alignment. */
+.idea-head {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.4fr) minmax(360px, auto) 92px 16px;
+  gap: 20px;
+  align-items: center;
+  width: 100%;
+  padding: 12px 16px;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.idea-head:hover { background: var(--paper-deep); }
+
+.idea-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.idea-id { display: flex; gap: 9px; align-items: center; }
+.idea-id strong { font-size: 13px; }
+.idea-segment { font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Four equal slots keeps numbers in a column down the whole list. */
+.idea-metrics { display: grid; grid-template-columns: repeat(4, minmax(88px, 1fr)); gap: 14px; }
+.idea-cell { display: flex; flex-direction: column; gap: 2px; align-items: flex-end; min-width: 0; }
+.idea-cap { color: var(--faint); font-size: 8px; font-style: normal; letter-spacing: 0.08em; }
+.idea-cell strong { display: flex; gap: 5px; align-items: baseline; font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+.idea-cell i { font-style: normal; font-size: 9px; }
+
+.idea-chevron { color: var(--muted); transition: transform 140ms ease; }
+.idea-chevron.rotated { transform: rotate(90deg); }
+
+@media (max-width: 1180px) {
+  .idea-head { grid-template-columns: minmax(160px, 1fr) auto 16px; }
+  .idea-head > svg.sparkline { display: none; }
+}
+@media (max-width: 860px) {
+  .idea-head { grid-template-columns: 1fr; gap: 10px; }
+  .idea-metrics { grid-template-columns: repeat(2, 1fr); }
+  .idea-cell { align-items: flex-start; }
+}
