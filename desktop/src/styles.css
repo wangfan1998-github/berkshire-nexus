@@ -387,16 +387,18 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .spread-flag { margin-left: 3px; color: var(--amber); font-weight: 600; cursor: help; }
 .phase-tag { margin-left: 4px; padding: 0 4px; color: var(--green-dark); font-size: 8px; background: var(--green-soft); border-radius: 2px; }
 
-/* ── Idea row: two lines, fixed metric slots ────────────────────────── */
-/* Every cell renders unconditionally, so an optional tag can no longer push
-   the columns out of alignment. */
+/* ── Idea row ───────────────────────────────────────────────────────── */
+/* Every column is a fixed width, not a fraction. `1fr` sizes to content, so
+   each row's numbers landed in a slightly different place — the columns only
+   line up if the widths cannot vary. The ticker column is capped so it stops
+   absorbing slack and squeezing the metrics. */
 .idea-head {
   display: grid;
-  grid-template-columns: minmax(190px, 1.4fr) minmax(360px, auto) 92px 16px;
-  gap: 20px;
+  grid-template-columns: minmax(180px, 232px) repeat(4, 1fr) 92px 14px;
+  gap: 0 24px;
   align-items: center;
   width: 100%;
-  padding: 12px 16px;
+  padding: 13px 18px;
   text-align: left;
   background: none;
   border: 0;
@@ -404,27 +406,58 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 }
 .idea-head:hover { background: var(--paper-deep); }
 
-.idea-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.idea-id { display: flex; gap: 9px; align-items: center; }
-.idea-id strong { font-size: 13px; }
-.idea-segment { font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.idea-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.idea-id { display: flex; gap: 8px; align-items: center; }
+.idea-id strong { font-size: 13px; letter-spacing: 0.02em; }
+.idea-segment {
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-/* Four equal slots keeps numbers in a column down the whole list. */
-.idea-metrics { display: grid; grid-template-columns: repeat(4, minmax(88px, 1fr)); gap: 14px; }
-.idea-cell { display: flex; flex-direction: column; gap: 2px; align-items: flex-end; min-width: 0; }
-.idea-cap { color: var(--faint); font-size: 8px; font-style: normal; letter-spacing: 0.08em; }
-.idea-cell strong { display: flex; gap: 5px; align-items: baseline; font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+/* Metric cells are direct grid children so they share the row's column tracks;
+   nesting them in a sub-grid was what let each row size independently. */
+.idea-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-end;
+  min-width: 0;
+}
+.idea-cap {
+  color: var(--faint);
+  font-size: 8px;
+  font-style: normal;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.idea-cell strong {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .idea-cell i { font-style: normal; font-size: 9px; }
 
 .idea-chevron { color: var(--muted); transition: transform 140ms ease; }
 .idea-chevron.rotated { transform: rotate(90deg); }
 
-@media (max-width: 1180px) {
-  .idea-head { grid-template-columns: minmax(160px, 1fr) auto 16px; }
+/* Drop the least essential columns before the grid can overflow. */
+@media (max-width: 1120px) {
+  /* Sparkline goes first — it is decorative next to the numbers. */
+  .idea-head { grid-template-columns: minmax(170px, 210px) repeat(4, 1fr) 14px; gap: 0 18px; }
   .idea-head > svg.sparkline { display: none; }
 }
-@media (max-width: 860px) {
-  .idea-head { grid-template-columns: 1fr; gap: 10px; }
-  .idea-metrics { grid-template-columns: repeat(2, 1fr); }
-  .idea-cell { align-items: flex-start; }
+@media (max-width: 880px) {
+  .idea-head { grid-template-columns: minmax(150px, 190px) repeat(3, 1fr) 14px; gap: 0 14px; }
+  .idea-head .idea-cell:nth-of-type(2) { display: none; }
+}
+@media (max-width: 700px) {
+  .idea-head { grid-template-columns: 1fr repeat(2, minmax(84px, auto)) 14px; gap: 8px 12px; }
+  .idea-head .idea-cell:nth-of-type(1),
+  .idea-head .idea-cell:nth-of-type(2) { display: none; }
 }

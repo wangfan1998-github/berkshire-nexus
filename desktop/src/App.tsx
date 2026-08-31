@@ -813,34 +813,33 @@ function BriefingPage({
                       <span className="idea-segment muted">{idea.segment_label}</span>
                     </div>
 
-                    {/* Fixed slots, always rendered — a conditional cell used to
-                        shift every column after it. */}
-                    <div className="idea-metrics">
-                      <span className="idea-cell">
-                        <em className="idea-cap">分</em>
-                        <strong>{idea.score.toFixed(1)}</strong>
-                      </span>
-                      <span className="idea-cell">
-                        <em className="idea-cap">动量</em>
-                        <strong>{idea.momentum_score.toFixed(1)}</strong>
-                      </span>
-                      <span className="idea-cell">
-                        <em className="idea-cap">现价</em>
+                    {/* Direct grid children so all rows share one set of column
+                        tracks; always rendered so an absent value cannot shift
+                        the columns after it. */}
+                    <span className="idea-cell">
+                      <em className="idea-cap">分</em>
+                      <strong>{idea.score.toFixed(1)}</strong>
+                    </span>
+                    <span className="idea-cell">
+                      <em className="idea-cap">动量</em>
+                      <strong>{idea.momentum_score.toFixed(1)}</strong>
+                    </span>
+                    <span className="idea-cell">
+                      <em className="idea-cap">现价</em>
+                      <strong>
+                        {money.format(idea.price)}
+                        <i className={idea.change_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.change_pct)}%</i>
+                      </strong>
+                    </span>
+                    <span className="idea-cell">
+                      <em className="idea-cap">成本</em>
+                      {idea.held_quantity > 0 ? (
                         <strong>
-                          {money.format(idea.price)}
-                          <i className={idea.change_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.change_pct)}%</i>
+                          {money.format(idea.average_cost)}
+                          <i className={idea.unrealised_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.unrealised_pct, 1)}%</i>
                         </strong>
-                      </span>
-                      <span className="idea-cell">
-                        <em className="idea-cap">成本</em>
-                        {idea.held_quantity > 0 ? (
-                          <strong>
-                            {money.format(idea.average_cost)}
-                            <i className={idea.unrealised_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.unrealised_pct, 1)}%</i>
-                          </strong>
-                        ) : <strong className="muted">未持仓</strong>}
-                      </span>
-                    </div>
+                      ) : <strong className="muted">未持仓</strong>}
+                    </span>
 
                     <Sparkline points={idea.price_history ?? []} low={idea.fifty_two_week_low} high={idea.fifty_two_week_high} width={92} height={28} />
                     <ChevronRight size={14} className={`idea-chevron ${expanded === idea.ticker ? "rotated" : ""}`} />
