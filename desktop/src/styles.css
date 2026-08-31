@@ -269,6 +269,8 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
    both sit on the text baseline. */
 .cash-plan-action { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
 .cash-plan-action > span { color: var(--muted); font-size: 10px; line-height: 1.5; }
+/* Sits inside the bordered input, so it needs no border of its own. */
+.inline-fill { flex: none; padding: 0 4px; white-space: nowrap; }
 .reject-reason { color: var(--risk); font-size: 9px; line-height: 1.5; }
 
 .live-exec-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: end; margin-top: 6px; }

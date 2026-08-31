@@ -15,7 +15,7 @@ const BINANCE_SECRET_KEYRING_ACCOUNT: &str = "binance-api-secret";
 const AI_KEYRING_ACCOUNT: &str = "ai-provider-api-key";
 // Mirrors LIVE_ACKNOWLEDGEMENT in src/trading/binance_stocks.py. The UI must
 // send this verbatim before any real order is submitted.
-const LIVE_ACKNOWLEDGEMENT: &str = "I_ACKNOWLEDGE_REAL_MONEY";
+const LIVE_ACKNOWLEDGEMENT: &str = "我确认使用真实资金";
 
 #[derive(Default)]
 struct AgentProcess(Mutex<Option<Child>>);

@@ -1082,6 +1082,18 @@ function StrategyPage({
                 autoComplete="off"
                 spellCheck={false}
               />
+              {/* Typing the phrase is friction, not security — the real gates are
+                  in Rust and Python. What it must stay is deliberate, so filling
+                  it is one click but never automatic. */}
+              {!acknowledged && (
+                <button
+                  type="button"
+                  className="text-button inline-fill"
+                  onClick={() => setConfirmation(LIVE_ACKNOWLEDGEMENT)}
+                >
+                  填入
+                </button>
+              )}
             </div>
           </label>
           <div className="button-row">
@@ -1098,16 +1110,16 @@ function StrategyPage({
               提交 {approved.length > 0 ? `${approved.length} 笔` : ""}真实订单
             </button>
           </div>
-          {approved.length > 0 && (
-            <p className="muted-note">
-              将提交 {approvedSells} 笔卖出
-              {approvedBuys > 0 ? ` + ${approvedBuys} 笔买入` : ""}；
-              未通过风控的 {(cycle?.risk_decisions.length ?? 0) - approved.length} 笔不会下单。
-              {approvedBuys === 0 && cycle?.cash_plan && cycle.cash_plan.shortfall > 0 &&
-                "买入全部因现金不足被拒，赎回理财后重新预览即可恢复。"}
-            </p>
-          )}
         </div>
+        {approved.length > 0 && (
+          <p className="muted-note">
+            将提交 {approvedSells} 笔卖出
+            {approvedBuys > 0 ? ` + ${approvedBuys} 笔买入` : ""}；
+            未通过风控的 {(cycle?.risk_decisions.length ?? 0) - approved.length} 笔不会下单。
+            {approvedBuys === 0 && cycle?.cash_plan && cycle.cash_plan.shortfall > 0 &&
+              "买入全部因现金不足被拒，赎回理财后重新预览即可恢复。"}
+          </p>
+        )}
         {confirmation.trim().length > 0 && !acknowledged && (
           <p className="warn-note">确认短语不匹配，必须与 {LIVE_ACKNOWLEDGEMENT} 完全一致。</p>
         )}
@@ -1440,7 +1452,8 @@ function SettingsPage({
         />
         <div className="risk-grid">
           {([
-            ["max_single_order_notional", "单笔金额上限 (USD)", 25, 10000],
+            ["max_single_order_notional", "单笔金额上限 (USD)", 5, 10000],
+            ["minimum_order_notional", "单笔金额下限 (USD)", 5, 1000],
             ["max_position_pct", "单一标的仓位上限 (%)", 1, 10],
             ["max_daily_turnover_pct", "日换手上限 (%)", 1, 25],
             ["max_daily_loss_pct", "日亏损熔断 (%)", 0.1, 1],

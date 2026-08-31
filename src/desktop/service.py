@@ -1188,7 +1188,7 @@ class DesktopService:
 
         allowlist = frozenset(DesktopService._tickers(value.get("allowed_symbols", []))) \
             if value.get("allowed_symbols") else frozenset()
-        return RiskPolicy(
+        policy = RiskPolicy(
             minimum_analysis_score=bounded(
                 "minimum_analysis_score", defaults.minimum_analysis_score, 100.0,
                 defaults.minimum_analysis_score,
@@ -1198,7 +1198,10 @@ class DesktopService:
                 defaults.max_position_pct,
             ),
             max_single_order_notional=bounded(
-                "max_single_order_notional", defaults.minimum_order_notional,
+                # Floor is Binance's $5 rather than the 25 default, so a small
+                # test cap and a small minimum can be set together. The two are
+                # cross-checked below.
+                "max_single_order_notional", 5.0,
                 defaults.max_single_order_notional, defaults.max_single_order_notional,
             ),
             max_daily_turnover_pct=bounded(
@@ -1209,8 +1212,24 @@ class DesktopService:
                 "max_daily_loss_pct", 0.1, defaults.max_daily_loss_pct,
                 defaults.max_daily_loss_pct,
             ),
-            minimum_order_notional=defaults.minimum_order_notional,
+            minimum_order_notional=bounded(
+                # Binance rejects equity orders under $5, so that is the floor.
+                # Exposed so a small real-money smoke test is possible without
+                # editing code; the default stays 25 to keep commission drag
+                # sane on ordinary rebalances.
+                "minimum_order_notional", 5.0, 1_000.0,
+                defaults.minimum_order_notional,
+            ),
             allow_market_orders_live=False,
             require_verified_data_live=True,
             allowed_symbols=allowlist,
         )
+        # An inverted window silently rejects every order: the planner sizes
+        # above the minimum, then the cap refuses it. Fail here instead, where
+        # the cause is visible.
+        if policy.minimum_order_notional > policy.max_single_order_notional:
+            raise ValueError(
+                f"最小下单额 {policy.minimum_order_notional:g} 不能大于单笔上限 "
+                f"{policy.max_single_order_notional:g}，否则所有订单都会被拒"
+            )
+        return policy

@@ -220,9 +220,9 @@ python3 -m src.desktop.cli --state-dir .berkshire-nexus live-reconcile
 python3 -m src.desktop.cli --state-dir .berkshire-nexus live-cycle AAPL MSFT
 
 # 真实下单：三重放行缺一不可
-export BERKSHIRE_NEXUS_LIVE_TRADING=I_ACKNOWLEDGE_REAL_MONEY
+export BERKSHIRE_NEXUS_LIVE_TRADING="我确认使用真实资金"
 python3 -m src.desktop.cli --state-dir .berkshire-nexus live-cycle AAPL MSFT \
-  --confirmation I_ACKNOWLEDGE_REAL_MONEY --submit
+  --confirmation "我确认使用真实资金" --submit
 ```
 
 **关于持仓来源**：Binance 没有 `/sapi/v1/equity/account` 这类持仓接口。成交后的股票以普通资产落在钱包里（默认 `CARD` 资金钱包，订单指定 `walletType=MAIN` 时落在现货钱包）。因此持仓由「钱包余额 ∩ 可交易股票池」还原，而不是累加成交历史——后者会漏掉 mint、划转和公司行为。

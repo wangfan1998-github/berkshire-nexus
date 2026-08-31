@@ -26,7 +26,12 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 from .types import OrderIntent
 
 
-LIVE_ACKNOWLEDGEMENT = "I_ACKNOWLEDGE_REAL_MONEY"
+# Typed verbatim by the operator before any real order or redemption. Chinese
+# because the operator reads Chinese: an acknowledgement nobody parses is a
+# formality, and the whole point is that it should be read before it is typed.
+# The value travels through argv and the BERKSHIRE_NEXUS_LIVE_TRADING env var,
+# both UTF-8 clean, and is compared with ==, never lowercased or normalised.
+LIVE_ACKNOWLEDGEMENT = "我确认使用真实资金"
 
 # Assets which represent settlement cash rather than an equity position.
 CASH_ASSETS: Set[str] = {"USDC", "USDT", "USD", "FDUSD", "BUSD", "USD1"}

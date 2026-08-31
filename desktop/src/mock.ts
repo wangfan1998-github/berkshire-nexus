@@ -26,6 +26,7 @@ export const defaultSettings: DesktopSettings = {
     max_single_order_notional: 10_000,
     max_daily_turnover_pct: 25,
     max_daily_loss_pct: 1,
+    minimum_order_notional: 25,
     allowed_symbols: [],
   },
 };

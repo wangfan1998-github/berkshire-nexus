@@ -49,6 +49,8 @@ export interface RiskConfig {
   minimum_analysis_score: number;
   max_position_pct: number;
   max_single_order_notional: number;
+  /** Orders below this are skipped. Floor is Binance's $5 equity minimum. */
+  minimum_order_notional: number;
   max_daily_turnover_pct: number;
   max_daily_loss_pct: number;
   allowed_symbols: string[];
@@ -238,7 +240,7 @@ export interface AgentRuntimeStatus {
 }
 
 /** Phrase the operator must type before any real order is submitted. */
-export const LIVE_ACKNOWLEDGEMENT = "I_ACKNOWLEDGE_REAL_MONEY";
+export const LIVE_ACKNOWLEDGEMENT = "我确认使用真实资金";
 
 export interface LivePosition {
   ticker: string;

@@ -115,7 +115,7 @@ export BINANCE_API_KEY='your-read-only-key'
 python3 -m src.cli binance-preflight AAPL MSFT
 ```
 
-There is intentionally no one-click live CLI yet. Safe autonomous execution still requires authoritative Binance cash/holding snapshots, order reconciliation, and restart recovery. The isolated `BinanceStocksClient` can build signed orders, but `place_order()` requires both `allow_live_orders=True` and `BERKSHIRE_NEXUS_LIVE_TRADING=I_ACKNOWLEDGE_REAL_MONEY`. It always submits direct equities with `tokenize=false`.
+There is intentionally no one-click live CLI yet. Safe autonomous execution still requires authoritative Binance cash/holding snapshots, order reconciliation, and restart recovery. The isolated `BinanceStocksClient` can build signed orders, but `place_order()` requires both `allow_live_orders=True` and `BERKSHIRE_NEXUS_LIVE_TRADING=我确认使用真实资金`. It always submits direct equities with `tokenize=false`.
 
 Every order must pass deterministic controls outside the learned model: a 10% position cap, 25% daily turnover cap, 1% daily-loss kill switch, no live market orders by default, and no live buys from fallback, inferred, or non-authoritative third-party research data. Valid risk-reducing sells remain possible after a kill switch. Binance eligibility, regional, PDT, session, and disclaimer requirements still apply. No documented Stocks testnet is assumed, so local paper trading is the mandatory first stage.
 
