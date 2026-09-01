@@ -89,12 +89,19 @@ class NewsService:
                 values.extend(self._fetch_sec(symbol, retrieved))
             except Exception as error:
                 errors.append("SEC EDGAR: " + self._safe_error(error))
-            if len([item for item in values if item.get("source") == "yahoo-finance-search"]) < 3:
-                attempted.append("google-news-rss")
-                try:
-                    values.extend(self._fetch_google(symbol, company_name, retrieved))
-                except Exception as error:
-                    errors.append("Google News: " + self._safe_error(error))
+            # Google News always runs. The old condition — fewer than 3 Yahoo
+            # items — never fired, because Yahoo reliably returns 5+ results;
+            # verified live, `providers_attempted` never once contained
+            # google-news-rss. So the feed carrying actual company events
+            # ("Nvidia Just Paused Part of Its AI Financing Machine") was dead
+            # code while the briefing cited portfolio-advice filler instead.
+            # Both sources are keyless and unquota'd, so there is no cost to
+            # merging them and letting dedup + recency sorting pick winners.
+            attempted.append("google-news-rss")
+            try:
+                values.extend(self._fetch_google(symbol, company_name, retrieved))
+            except Exception as error:
+                errors.append("Google News: " + self._safe_error(error))
 
         deduped = self._dedupe(values)
         deduped.sort(key=lambda item: item.get("published_at_utc", ""), reverse=True)
@@ -127,7 +134,7 @@ class NewsService:
         params = urllib.parse.urlencode({
             "q": ticker,
             "quotesCount": 1,
-            "newsCount": max(self.config.max_news_items * 2, 8),
+            "newsCount": max(self.config.max_news_items * 3, 12),
             "enableFuzzyQuery": "false",
         })
         payload = self._json(
@@ -140,7 +147,7 @@ class NewsService:
             url = str(raw.get("link", "")).strip()
             if not title or not url:
                 continue
-            if related and ticker not in related and ticker not in title.upper():
+            if not self._is_relevant(ticker, title, related):
                 continue
             published = self._epoch_iso(raw.get("providerPublishTime"))
             values.append(self._item(
@@ -154,6 +161,48 @@ class NewsService:
                 related=related or [ticker],
             ))
         return values
+
+    # A story tagged with this many tickers is a roundup, not company news.
+    # Verified live: Yahoo returned 10 NVDA "results" of which the top five were
+    # generic listicles ("Should You Put 5% of Your Portfolio in Bitcoin?",
+    # "If You'd Invested $5,000 in VOO a Decade Ago"), each tagged NVDA alongside
+    # BTC-USD/VOO/^GSPC. The old filter passed anything carrying the symbol, so
+    # all ten passed and the briefing's evidence pool was mostly SEO filler.
+    _MAX_RELATED_TICKERS = 3
+    # Phrasings that mark portfolio-advice content rather than a company event.
+    _LISTICLE_MARKERS = (
+        "if you'd invested", "if you had invested", "should you put",
+        "here's what the numbers say", "best stocks", "top stocks",
+        "stocks to buy", "millionaire", "retire", "dividend for",
+        "a decade ago", "years ago", "how much $", "turn $",
+    )
+
+    @classmethod
+    def _is_relevant(
+        cls,
+        ticker: str,
+        title: str,
+        related: Sequence[str],
+    ) -> bool:
+        """Whether a headline is about this company rather than merely tagged.
+
+        Two independent signals, because either alone lets filler through: a
+        roundup dilutes its ticker list, and an advice piece names the company in
+        the title but is not reporting on it.
+        """
+
+        normalized = title.lower()
+        if any(marker in normalized for marker in cls._LISTICLE_MARKERS):
+            # Unless the company is genuinely the sole subject.
+            if len(related) > 1:
+                return False
+        if len(related) > cls._MAX_RELATED_TICKERS:
+            # A wide tag list is only acceptable when the title leads with the
+            # symbol, which is how single-company coverage is normally written.
+            return ticker in normalized.upper().split() or normalized.upper().startswith(ticker)
+        if related and ticker not in [value.upper() for value in related]:
+            return ticker in title.upper()
+        return True
 
     def _fetch_sec(self, ticker: str, retrieved: str) -> List[Dict[str, Any]]:
         if self._sec_tickers is None:
@@ -250,6 +299,9 @@ class NewsService:
             title = (raw.findtext("title") or "").strip()
             url = (raw.findtext("link") or "").strip()
             if not title or not url:
+                continue
+            # Google News does not tag tickers, so relevance rests on the title.
+            if not self._is_relevant(ticker, title, [ticker]):
                 continue
             source = raw.find("source")
             publisher = (source.text or "Google News").strip() if source is not None else "Google News"

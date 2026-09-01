@@ -645,41 +645,9 @@ class DesktopService:
                 news_targets.append(ticker)
 
         # Per-ticker sentiment in -1..1, fed into the orchestrator's timing layer.
-        sentiment_scores: Dict[str, float] = {}
-        headlines = service.headlines(news_targets)
-        if ai_service is not None and any(headlines.values()):
-            batches = {
-                ticker: [row["title"] for row in rows]
-                for ticker, rows in headlines.items() if rows
-            }
-            scored = ai_service.score_headlines(batches)
-            if scored.get("status") == "ok":
-                for ticker, value in (scored.get("scores") or {}).items():
-                    key = str(ticker).upper()
-                    if key not in batches:
-                        continue
-                    rows = headlines.get(key, [])
-                    score = _clamp_score(value.get("score"))
-                    sentiment_scores[key] = score
-                    attention.sentiment[key] = NewsSentiment(
-                        ticker=key,
-                        article_count=len(rows),
-                        score=score,
-                        label=str(value.get("label") or ""),
-                        top_headlines=[
-                            {"title": row["title"], "source": row.get("source", ""),
-                             "url": row.get("url", ""), "label": ""}
-                            for row in rows[:5]
-                        ],
-                        available=True,
-                    )
-                    driver = str(value.get("driver") or "")[:200]
-                    if driver:
-                        attention.sentiment[key].top_headlines.insert(
-                            0, {"title": f"关键驱动：{driver}", "source": "AI", "url": "", "label": ""}
-                        )
-            elif scored.get("error"):
-                attention.errors["headline-scoring"] = str(scored["error"])[:200]
+        sentiment_scores = self._score_sentiment(
+            service, news_targets, ai_service, attention
+        )
 
         reports = OmniAlphaOrchestrator(
             config,
@@ -705,6 +673,73 @@ class DesktopService:
         payload = briefing.to_dict()
         payload["reports"] = [self._report(report) for report in reports]
         return json_safe(payload)
+
+    @staticmethod
+    def _score_sentiment(
+        service: "AttentionService",
+        targets: Sequence[str],
+        ai_service: Optional[Any],
+        attention: Optional[Any] = None,
+    ) -> Dict[str, float]:
+        """Per-ticker news sentiment in -1..1, batched into one model call.
+
+        Shared by the briefing and the live cycle **so both score identically**.
+        Previously only the briefing supplied sentiment to the orchestrator; the
+        strategy page constructed its own orchestrator without it. Sentiment is
+        40% of the timing layer and timing is 25% of the composite, so the same
+        ticker scored up to 4 points lower on the strategy page than in the
+        briefing that recommended it — enough to cross the 60-point entry line.
+        That is how a briefing showing "建仓/加仓" produced a preview of nothing
+        but SELLs: every name silently re-scored below the threshold, and a held
+        name under the line is soft-trimmed.
+
+        ``attention`` is optional and only populated for display; the scores are
+        the part that must not diverge.
+        """
+
+        scores: Dict[str, float] = {}
+        if ai_service is None:
+            return scores
+        headlines = service.headlines(targets)
+        batches = {
+            ticker: [row["title"] for row in rows]
+            for ticker, rows in headlines.items() if rows
+        }
+        if not batches:
+            return scores
+        scored = ai_service.score_headlines(batches)
+        if scored.get("status") != "ok":
+            if attention is not None and scored.get("error"):
+                attention.errors["headline-scoring"] = str(scored["error"])[:200]
+            return scores
+
+        for ticker, value in (scored.get("scores") or {}).items():
+            key = str(ticker).upper()
+            if key not in batches:
+                continue
+            score = _clamp_score(value.get("score"))
+            scores[key] = score
+            if attention is None:
+                continue
+            rows = headlines.get(key, [])
+            attention.sentiment[key] = NewsSentiment(
+                ticker=key,
+                article_count=len(rows),
+                score=score,
+                label=str(value.get("label") or ""),
+                top_headlines=[
+                    {"title": row["title"], "source": row.get("source", ""),
+                     "url": row.get("url", ""), "label": ""}
+                    for row in rows[:5]
+                ],
+                available=True,
+            )
+            driver = str(value.get("driver") or "")[:200]
+            if driver:
+                attention.sentiment[key].top_headlines.insert(
+                    0, {"title": f"关键驱动：{driver}", "source": "AI", "url": "", "label": ""}
+                )
+        return scores
 
     @staticmethod
     def _cash_plan(
@@ -1001,8 +1036,20 @@ class DesktopService:
                 venue_priced.append(ticker)
 
         config = ResearchConfig.from_dict(research_config or {})
+        # Score news sentiment through the SAME path the briefing uses. Omitting
+        # it here re-scored every name up to 4 points lower than the briefing
+        # that recommended it, turning "建仓/加仓" into an all-SELL preview.
+        ai_service = AIResearchService(config, ai_api_key) if config.ai_enabled else None
+        sentiment_scores = self._score_sentiment(
+            AttentionService(cache_dir=self.state_directory),
+            normalized,
+            ai_service,
+        )
         reports = OmniAlphaOrchestrator(
-            config, ai_api_key, venue_prices=prices
+            config,
+            ai_api_key,
+            venue_prices=prices,
+            news_sentiment=sentiment_scores,
         ).compare_multiple(normalized)
         for report in reports:
             prices.setdefault(report.financials.ticker, float(report.financials.price))

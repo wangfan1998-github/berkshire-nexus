@@ -878,6 +878,12 @@ function BriefingPage({
                         {idea.held_quantity > 0 ? ` · 当前 ${idea.weight_pct.toFixed(2)}%` : ""}
                         {" · "}安全边际 {signed(idea.margin_of_safety_pct, 1)}%
                         {" · "}瓶颈 L{idea.chokepoint_level}
+                        {(idea.universe_size ?? 0) > 0 && (
+                          <>
+                            {" · "}同批排名 {(idea.universe_percentile ?? 0).toFixed(0)} 分位
+                            （共 {idea.universe_size} 只）
+                          </>
+                        )}
                       </p>
                       {idea.ai_summary && (
                         <>
@@ -901,6 +907,21 @@ function BriefingPage({
                             )}
                           </ul>
                           <p className="muted">社交热度仅作拥挤度参考，不构成买入理由。</p>
+                        </>
+                      )}
+                      {(idea.news_drivers?.length ?? 0) > 0 && (
+                        <>
+                          <p><strong>近期动态</strong></p>
+                          <ul>
+                            {idea.news_drivers!.map((item, index) => (
+                              <li key={index}>
+                                {item.url ? (
+                                  <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
+                                ) : item.title}
+                                {item.source && <span className="muted"> — {item.source}</span>}
+                              </li>
+                            ))}
+                          </ul>
                         </>
                       )}
                       {idea.news.length > 0 && (

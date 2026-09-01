@@ -89,130 +89,23 @@ class CompanyFinancials:
     # Downsampled 1y daily closes for a sparkline. The series is already fetched
     # to compute beta and was being discarded; charts need it too.
     price_history: List[Dict[str, Any]] = field(default_factory=list)
+    # Up to 4 fiscal years, newest first. A single trailing year cannot value a
+    # cyclical: Micron's FY2025 capex ($15.9B) nearly cancelled its operating
+    # cash flow ($17.5B), leaving FCF of $1.7B and a DCF that read $69 against a
+    # $959 quote. Normalising across the cycle is the only way company-level
+    # valuation generalises beyond steady compounders.
+    operating_cash_flow_history: List[float] = field(default_factory=list)
+    capex_history: List[float] = field(default_factory=list)
+    depreciation_history: List[float] = field(default_factory=list)
+    net_income_history: List[float] = field(default_factory=list)
+    revenue_history: List[float] = field(default_factory=list)
 
 
-# Default fallback profile metrics for standard tech/macro universe
-_PRESET_DATA: Dict[str, Dict[str, Any]] = {
-    "TSM": {
-        "name": "Taiwan Semiconductor Manufacturing Co.",
-        "sector": "Semiconductor Foundry",
-        "price": 205.0,
-        "pe": 24.2,
-        "forward_pe": 21.5,
-        "eps": 8.47,
-        "beta": 1.15,
-        "market_cap": 1050e9,
-        "revenue_growth_yoy": 0.28,
-        "gross_margin": 0.54,
-        "operating_margin": 0.43,
-        "fcf_yield": 0.045,
-        "roe": 0.28,
-        "debt_to_equity": 0.25,
-        "description": "World's leading dedicated semiconductor foundry with >90% leading-edge market share.",
-    },
-    "UBER": {
-        "name": "Uber Technologies, Inc.",
-        "sector": "Internet / Mobility & Delivery",
-        "price": 79.29,
-        "pe": 17.41,
-        "forward_pe": 22.0,
-        "eps": 4.56,
-        "beta": 1.16,
-        "market_cap": 165e9,
-        "revenue_growth_yoy": 0.18,
-        "gross_margin": 0.39,
-        "operating_margin": 0.095,
-        "fcf_yield": 0.052,
-        "roe": 0.32,
-        "debt_to_equity": 0.70,
-        "description": "Global mobility, delivery, and freight network platform with dominant network effects.",
-    },
-    "APP": {
-        "name": "AppLovin Corporation",
-        "sector": "AdTech & AI Software",
-        "price": 298.59,
-        "pe": 22.95,
-        "forward_pe": 24.5,
-        "eps": 13.01,
-        "beta": 2.50,
-        "market_cap": 98e9,
-        "revenue_growth_yoy": 0.39,
-        "gross_margin": 0.72,
-        "operating_margin": 0.48,
-        "fcf_yield": 0.048,
-        "roe": 0.45,
-        "debt_to_equity": 1.40,
-        "description": "Mobile app growth platform powered by AXON 2.0 AI recommendation and advertising engine.",
-    },
-    "ADBE": {
-        "name": "Adobe Inc.",
-        "sector": "Enterprise Software",
-        "price": 276.27,
-        "pe": 15.81,
-        "forward_pe": 15.2,
-        "eps": 17.47,
-        "beta": 1.41,
-        "market_cap": 120e9,
-        "revenue_growth_yoy": 0.10,
-        "gross_margin": 0.88,
-        "operating_margin": 0.36,
-        "fcf_yield": 0.065,
-        "roe": 0.35,
-        "debt_to_equity": 0.45,
-        "description": "Global leader in digital media and digital marketing software (Creative Cloud & Firefly).",
-    },
-    "SOFI": {
-        "name": "SoFi Technologies, Inc.",
-        "sector": "Fintech / Digital Banking",
-        "price": 18.24,
-        "pe": 38.44,
-        "forward_pe": 28.0,
-        "eps": 0.47,
-        "beta": 2.21,
-        "market_cap": 19e9,
-        "revenue_growth_yoy": 0.22,
-        "gross_margin": 0.75,
-        "operating_margin": 0.12,
-        "fcf_yield": 0.015,
-        "roe": 0.07,
-        "debt_to_equity": 1.80,
-        "description": "Digital financial services and consumer lending platform with national banking charter.",
-    },
-    "GOOGL": {
-        "name": "Alphabet Inc.",
-        "sector": "Internet & Cloud",
-        "price": 344.82,
-        "pe": 22.10,
-        "forward_pe": 20.5,
-        "eps": 15.60,
-        "beta": 1.05,
-        "market_cap": 2100e9,
-        "revenue_growth_yoy": 0.14,
-        "gross_margin": 0.58,
-        "operating_margin": 0.32,
-        "fcf_yield": 0.042,
-        "roe": 0.30,
-        "debt_to_equity": 0.12,
-        "description": "Global technology company specializing in search, advertising, cloud, hardware, and AI (Gemini / TPU).",
-    },
-    "AVGO": {
-        "name": "Broadcom Inc.",
-        "sector": "Semiconductor & Infrastructure Software",
-        "price": 336.61,
-        "pe": 32.50,
-        "forward_pe": 26.0,
-        "eps": 10.35,
-        "beta": 1.30,
-        "market_cap": 820e9,
-        "revenue_growth_yoy": 0.42,
-        "gross_margin": 0.65,
-        "operating_margin": 0.45,
-        "fcf_yield": 0.040,
-        "roe": 0.26,
-        "debt_to_equity": 1.10,
-        "description": "Global infrastructure technology leader in networking switches (Tomahawk), custom AI ASICs, and enterprise software.",
-    },
-}
+# No per-ticker preset table. Seven symbols used to carry hand-written prices
+# (TSM at $205, UBER at $79) that went stale the day they were written and were
+# silently substituted whenever a provider call failed — an offline record then
+# looked like a real quote from months ago. Every symbol now degrades the same
+# way, through the neutral defaults below, and says so via `fallback_fields`.
 
 
 class DataFetcher:
@@ -246,7 +139,6 @@ class DataFetcher:
         sym = ticker.upper().strip()
         if not sym:
             raise ValueError("ticker is required")
-        fallback = _PRESET_DATA.get(sym, {}).copy()
         data: Dict[str, Any] = {}
         trace: List[Dict[str, Any]] = []
         fallback_fields: List[str] = []
@@ -346,7 +238,7 @@ class DataFetcher:
         }
         for field_name, default in defaults.items():
             if not self._field_present(field_name, data.get(field_name)):
-                data[field_name] = fallback.get(field_name, default)
+                data[field_name] = default
                 fallback_fields.append(field_name)
 
         if not self._present(data.get("forward_pe")):
@@ -373,7 +265,7 @@ class DataFetcher:
         if network_fundamentals:
             sources.append("nasdaq-fundamentals")
         if fallback_fields:
-            sources.append("curated/heuristic-fallback")
+            sources.append("heuristic-fallback")
 
         return CompanyFinancials(
             ticker=sym,
@@ -416,6 +308,21 @@ class DataFetcher:
             shareholders_equity=float(data.get("shareholders_equity") or 0.0),
             industry=str(data.get("industry") or ""),
             price_history=_downsample_history(chart_history, 60),
+            operating_cash_flow_history=[
+                float(value) for value in (data.get("operating_cash_flow_history") or [])
+            ],
+            capex_history=[
+                float(value) for value in (data.get("capex_history") or [])
+            ],
+            depreciation_history=[
+                float(value) for value in (data.get("depreciation_history") or [])
+            ],
+            net_income_history=[
+                float(value) for value in (data.get("net_income_history") or [])
+            ],
+            revenue_history=[
+                float(value) for value in (data.get("revenue_history") or [])
+            ],
             # An ETF has no issuer income statement: NASDAQ's fundamentals
             # endpoint returns nothing for revenue/equity/EPS. Verified live —
             # QQQM/SPYM/SMH/COWZ/URA all come back with zeros and are absent
@@ -533,6 +440,14 @@ class DataFetcher:
         capex = self._statement_number(cashflow, "Capital Expenditures", "value2")
         market_cap = self._number(self._summary_value(summary, "MarketCap"))
 
+        # Full reported history (newest first). NASDAQ returns 4 fiscal years in
+        # columns value2..value5; a cyclical needs all of them to be valued.
+        ocf_history = self._statement_series(cashflow, "Net Cash Flow-Operating")
+        capex_history = self._statement_series(cashflow, "Capital Expenditures")
+        depreciation_history = self._statement_series(cashflow, "Depreciation")
+        net_income_history = self._statement_series(income, "Net Income")
+        revenue_history = self._statement_series(income, "Total Revenue")
+
         historical_eps = [
             self._number(item.get("earnings"))
             for item in eps_payload.get("earningsPerShare", [])
@@ -559,6 +474,11 @@ class DataFetcher:
             "revenue": revenue_latest,
             "net_income": net_income,
             "shareholders_equity": equity,
+            "operating_cash_flow_history": ocf_history,
+            "capex_history": capex_history,
+            "depreciation_history": depreciation_history,
+            "net_income_history": net_income_history,
+            "revenue_history": revenue_history,
             "roe": self._ratio(net_income, equity),
             "debt_to_equity": self._ratio(
                 (short_debt or 0.0) + (long_debt or 0.0), equity
@@ -646,6 +566,26 @@ class DataFetcher:
         value = cls._number(rows.get(label, {}).get(column))
         # Nasdaq financial statements are expressed in thousands of dollars.
         return value * 1000.0 if value is not None else None
+
+    @classmethod
+    def _statement_series(
+        cls,
+        rows: Dict[str, Dict[str, Any]],
+        label: str,
+    ) -> List[float]:
+        """Every reported fiscal year for one line item, newest first.
+
+        Columns value2..value5 hold the four years NASDAQ returns. Missing years
+        are dropped rather than zero-filled: a zero would be read as "this
+        company earned nothing that year" and drag a normalised average down.
+        """
+
+        series: List[float] = []
+        for column in ("value2", "value3", "value4", "value5"):
+            value = cls._statement_number(rows, label, column)
+            if value is not None:
+                series.append(value)
+        return series
 
     @staticmethod
     def _summary_value(summary: Dict[str, Any], key: str) -> Any:

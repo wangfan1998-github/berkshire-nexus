@@ -22,6 +22,15 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..core.orchestrator import ComprehensiveAnalysisReport
+from ..core.gates import (
+    CHASE_DAY_PCT,
+    CHASE_RANGE_PCT,
+    ETF_POSITION_CAP_PCT,
+    MIN_RANKED_UNIVERSE,
+    TOP_QUANTILE_PCT,
+    chase_reason as _chase_reason,
+    valuation_block_reason,
+)
 from ..data.attention import AttentionResult, BuzzEntry, NewsSentiment, crowding_note
 
 
@@ -76,10 +85,22 @@ class BriefingIdea:
     news_label: str = ""
     news_article_count: int = 0
     news_available: bool = False
+    # Headlines behind `news_score`. These come from Google News RSS and are the
+    # feed that actually carries company events ("Nvidia Just Paused Part of Its
+    # AI Financing Machine"). They were fetched, compressed into one float, then
+    # discarded — so the most informative source in the pipeline reached neither
+    # the screen nor the model's evidence pool.
+    news_drivers: List[Dict[str, Any]] = field(default_factory=list)
     # 1y downsampled closes, for the trend sparkline.
     price_history: List[Dict[str, Any]] = field(default_factory=list)
     fifty_two_week_low: float = 0.0
     fifty_two_week_high: float = 0.0
+    # Relative standing within the run. The absolute score barely moves day to
+    # day (45% of it is quarterly filings), so rank is the field that actually
+    # carries new information between briefings.
+    universe_percentile: float = 0.0
+    universe_size: int = 0
+    valuation_percentile: float = -1.0
 
 
 @dataclass
@@ -112,17 +133,9 @@ class DailyBriefing:
         }
 
 
-# A single-day move beyond this is chasing, not accumulating. Applied as a hard
-# gate rather than a score adjustment: momentum carries only 3.75% of the final
-# score (15% of the Qlib composite, which is 25% of the total), so a +22% day
-# could shift the score by at most ~1.5 points and never blocked an entry.
-CHASE_DAY_PCT = 5.0
-# Near the top of the 52-week range most of the move is already priced in.
-CHASE_RANGE_PCT = 92.0
-# ETFs hold dozens to hundreds of names, so the single-name concentration limit
-# does not apply to them; capping an index fund at 6% would force a diversified
-# holding to be shredded.
-ETF_POSITION_CAP_PCT = 30.0
+# Entry gates (chase thresholds, ETF cap) live in ``core.gates`` so the order
+# planner applies exactly the same rules. They used to be defined here, private
+# to the briefing, which let the two surfaces disagree about the same ticker.
 
 
 def classify_action(
@@ -132,11 +145,23 @@ def classify_action(
     weight_pct: float,
     minimum_score: float = 60.0,
     buzz: Optional[BuzzEntry] = None,
+    entry_percentile: float = TOP_QUANTILE_PCT,
 ) -> tuple:
     """Decide ADD / HOLD / TRIM / AVOID and state why.
 
     Deterministic on purpose: the LLM explains and challenges this call, it does
     not make it. Position caps come from the risk assessment, not the model.
+
+    Entry is granted on **either** an absolute score above ``minimum_score`` or a
+    top-quantile rank within today's universe. A fixed line alone is a bet that
+    the constant is calibrated to the market: measured live across 16 AI-chain
+    names, every one scored below 60 once the DCF was corrected, so a pure
+    absolute test emitted zero ideas every single day and the briefing was
+    unusable. Rank cannot go permanently empty, because something is always
+    relatively best — and it *moves*, which a near-static absolute score does not.
+
+    The hard gates below (chase, valuation, momentum) still apply to a
+    rank-qualified name, so "best of a bad universe" cannot buy a blow-off top.
 
     ETFs take a separate path: their cap is wider because they are already
     diversified, and their valuation is skipped because an index has no issuer
@@ -146,12 +171,18 @@ def classify_action(
     reasons: List[str] = []
     score = report.final_composite_score
     financials = report.financials
+    percentile = float(getattr(report, "universe_percentile", 0.0) or 0.0)
+    universe_size = int(getattr(report, "universe_size", 0) or 0)
     is_etf = bool(getattr(financials, "is_etf", False))
     cap = (
         ETF_POSITION_CAP_PCT if is_etf
         else report.risk_assessment.recommended_max_allocation_pct
     )
     held = held_quantity > 0.0
+    # Ranking needs a real cross-section to mean anything; below that, fall back
+    # to the absolute line alone rather than crowning the best of three.
+    ranked = universe_size >= MIN_RANKED_UNIVERSE
+    qualifies_on_rank = ranked and percentile >= entry_percentile
 
     if is_etf:
         # An ETF cannot be judged on ROE or a DCF, so only concentration and
@@ -168,8 +199,14 @@ def classify_action(
         reasons.append("估值与基本面引擎对指数不适用，仅依据仓位与价格位置")
         return ("HOLD" if held else "ADD"), reasons
 
-    if score < minimum_score:
-        reasons.append(f"综合分 {score:.1f} 低于 {minimum_score:.0f} 分入场线")
+    if score < minimum_score and not qualifies_on_rank:
+        if ranked:
+            reasons.append(
+                f"综合分 {score:.1f} 低于 {minimum_score:.0f} 分入场线，"
+                f"且仅排在同批 {universe_size} 只中的第 {percentile:.0f} 分位"
+            )
+        else:
+            reasons.append(f"综合分 {score:.1f} 低于 {minimum_score:.0f} 分入场线")
         if held:
             reasons.append("已持有且评分不足，应减仓")
             return "TRIM", reasons
@@ -190,12 +227,9 @@ def classify_action(
         return ("HOLD" if held else "AVOID"), reasons
 
     # A negative margin of safety means the DCF says it is already expensive.
-    valuation = report.valuation
-    if getattr(valuation, "is_reliable", True) and valuation.margin_of_safety_pct < -10.0:
-        reasons.append(
-            f"安全边际 {valuation.margin_of_safety_pct:+.1f}%，内在价值 "
-            f"{valuation.intrinsic_value_dcf:.2f} 低于现价 {financials.price:.2f}"
-        )
+    expensive = valuation_block_reason(report)
+    if expensive:
+        reasons.append(expensive)
         return ("HOLD" if held else "AVOID"), reasons
 
     momentum = report.quant_factors.momentum_score
@@ -203,7 +237,17 @@ def classify_action(
         reasons.append(f"动量 {momentum:.1f} 偏弱（{'；'.join(report.quant_factors.momentum_notes)}）")
         return ("HOLD" if held else "AVOID"), reasons
 
-    reasons.append(f"综合分 {score:.1f}，仓位上限 {cap:.1f}%")
+    reasons.append(
+        f"综合分 {score:.1f}"
+        + (f"（同批 {universe_size} 只中第 {percentile:.0f} 分位）" if ranked else "")
+        + f"，仓位上限 {cap:.1f}%"
+    )
+    if score < minimum_score and qualifies_on_rank:
+        # Be explicit that this is a relative call, not an absolute bargain.
+        reasons.append(
+            f"注意：未达 {minimum_score:.0f} 分绝对线，入选理由是相对排名靠前，"
+            "属于矮子里拔将军"
+        )
     if report.quant_factors.momentum_notes:
         reasons.append("；".join(report.quant_factors.momentum_notes))
     if report.valuation.margin_of_safety_pct < 0:
@@ -211,41 +255,6 @@ def classify_action(
             f"注意：安全边际 {report.valuation.margin_of_safety_pct:+.1f}%，估值已偏贵"
         )
     return "ADD", reasons
-
-
-def _chase_reason(
-    report: ComprehensiveAnalysisReport,
-    buzz: Optional[BuzzEntry] = None,
-) -> str:
-    """Return why this is a chase, or an empty string when entry timing is fine.
-
-    Deliberately independent of the composite score: "it already ran today" is a
-    timing question, and diluting it into a 3.75%-weight factor let a +22% day
-    still clear the entry threshold.
-    """
-
-    financials = report.financials
-    change = float(financials.price_change_pct or 0.0)
-    if change >= CHASE_DAY_PCT:
-        return f"今日已涨 {change:+.1f}%，超过 {CHASE_DAY_PCT:.0f}% 追高阈值，今天不是买点"
-
-    low = float(financials.fifty_two_week_low or 0.0)
-    high = float(financials.fifty_two_week_high or 0.0)
-    price = float(financials.price or 0.0)
-    if high > low > 0.0 and price > 0.0:
-        position = (price - low) / (high - low) * 100.0
-        if position >= CHASE_RANGE_PCT:
-            return f"处于52周区间 {position:.0f}% 分位，上行空间已被大量定价"
-
-    # Crowding: top-10 on Reddit AND still accelerating. Treated as a reason to
-    # wait, never as confirmation — the one rigorous audit of finance-influencer
-    # calls found 45% directional accuracy across ~18k predictions.
-    if buzz is not None and buzz.is_crowded:
-        return (
-            f"社交热度第 {buzz.rank} 位且提及量放大 {buzz.surge_ratio:.1f}x，"
-            "属于拥挤交易，等热度消退再看"
-        )
-    return ""
 
 
 BRIEFING_SYSTEM = (
@@ -406,9 +415,20 @@ class BriefingComposer:
                 news_label=(news.label if news else ""),
                 news_article_count=(news.article_count if news else 0),
                 news_available=(bool(news and news.available)),
+                news_drivers=[
+                    {
+                        "title": str(item.get("title", ""))[:220],
+                        "source": str(item.get("source", "")),
+                        "url": str(item.get("url", "")),
+                    }
+                    for item in ((news.top_headlines if news else []) or [])[:5]
+                ],
                 price_history=list(getattr(report.financials, "price_history", []) or []),
                 fifty_two_week_low=float(report.financials.fifty_two_week_low or 0.0),
                 fifty_two_week_high=float(report.financials.fifty_two_week_high or 0.0),
+                universe_percentile=float(getattr(report, "universe_percentile", 0.0) or 0.0),
+                universe_size=int(getattr(report, "universe_size", 0) or 0),
+                valuation_percentile=float(getattr(report, "valuation_percentile", -1.0)),
             ))
 
         # Rank actionable ideas first, then by score.
@@ -467,6 +487,11 @@ class BriefingComposer:
                     "social_crowded": idea.buzz_crowded,
                     "news_sentiment_score": idea.news_score,
                     "news_sentiment_label": idea.news_label,
+                    # Real headlines, so the model reasons about events rather
+                    # than only about a sentiment float it cannot interrogate.
+                    "recent_headlines": [
+                        item.get("title", "") for item in idea.news_drivers
+                    ],
                 }
                 for idea in briefing.ideas
             ],

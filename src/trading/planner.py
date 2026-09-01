@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
 from ..core.orchestrator import ComprehensiveAnalysisReport
+from ..core.gates import entry_block_reason, qualifies_on_rank
 from ..learning.features import extract_report_features
 from ..learning.model import AdaptiveLinearModel
 from .types import OrderIntent, PortfolioSnapshot
@@ -62,9 +63,17 @@ class AllocationPlanner:
                     report.final_composite_score * self.policy.analysis_weight
                     + learned_score * self.policy.learned_weight
                 )
-            if combined < self.policy.minimum_score:
+            if combined < self.policy.minimum_score and not qualifies_on_rank(report):
                 continue
             if report.risk_assessment.recommended_max_allocation_pct <= 0.0:
+                continue
+            # The same hard entry gates the briefing applies. Without them the
+            # two surfaces run different decision models over identical data:
+            # the briefing would show AVOID on a name that had already run +8%
+            # today while the planner still sized a buy for it. A gate blocks
+            # *adding*, never trimming, so a held name still reaches its target.
+            blocked = entry_block_reason(report)
+            if blocked:
                 continue
             scored.append((report, round(combined, 4), learned_score))
 
@@ -78,7 +87,10 @@ class AllocationPlanner:
             if held_value <= 0.0 or equity_for_soft <= 0.0:
                 continue
             score = report.final_composite_score
-            if score >= self.policy.minimum_score:
+            if score >= self.policy.minimum_score or qualifies_on_rank(report):
+                # Entry-eligible on either test; `target_weights` already holds
+                # its target. Soft-trimming it here too would plan a buy and a
+                # sell for the same name in one cycle.
                 continue
             current_weight = held_value / equity_for_soft
             if score < self.policy.exit_score:
@@ -227,6 +239,22 @@ class AllocationPlanner:
             kept.append(intent)
         return sorted(kept, key=lambda item: 0 if item.side == "SELL" else 1)
 
+    def _conviction(self, score: float) -> float:
+        """Weight-allocation conviction for a qualifying name.
+
+        Distance above the entry line, floored so a rank-qualified name (which is
+        *below* the line by definition) still receives a positive, ordered share.
+        A flat `max(..., 0.01)` gave every sub-threshold name an identical 0.01,
+        so a whole rank-qualified cohort would split the book evenly regardless of
+        how they actually scored. Scaling the floor by score preserves ordering.
+        """
+
+        above = score - self.policy.minimum_score
+        if above > 0.01:
+            return above
+        # Map scores below the line onto a small positive band that still ranks.
+        return max(score, 0.0) / self.policy.minimum_score * 0.01 if self.policy.minimum_score > 0 else 0.01
+
     def _bounded_weights(
         self,
         scored: Sequence[Tuple[ComprehensiveAnalysisReport, float, Optional[float]]],
@@ -238,12 +266,12 @@ class AllocationPlanner:
         active = list(scored)
 
         while active and remaining > 1e-12:
-            conviction_sum = sum(max(score - self.policy.minimum_score, 0.01) for _, score, _ in active)
+            conviction_sum = sum(self._conviction(score) for _, score, _ in active)
             capped_any = False
             next_active: List[Tuple[ComprehensiveAnalysisReport, float, Optional[float]]] = []
             for report, score, learned_score in active:
                 ticker = report.financials.ticker
-                share = remaining * max(score - self.policy.minimum_score, 0.01) / conviction_sum
+                share = remaining * self._conviction(score) / conviction_sum
                 cap = min(
                     self.policy.global_position_cap_pct,
                     report.risk_assessment.recommended_max_allocation_pct,
@@ -261,7 +289,7 @@ class AllocationPlanner:
             if not capped_any:
                 for report, score, _ in next_active:
                     ticker = report.financials.ticker
-                    weights[ticker] += remaining * max(score - self.policy.minimum_score, 0.01) / conviction_sum
+                    weights[ticker] += remaining * self._conviction(score) / conviction_sum
                 remaining = 0.0
                 break
             active = next_active

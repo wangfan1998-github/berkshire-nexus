@@ -6,7 +6,7 @@ import math
 from dataclasses import asdict, dataclass
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 from uuid import uuid4
 from ..data.fetcher import DataFetcher, CompanyFinancials
 from .chokepoint import ChokepointAnalyzer, ChokepointResult
@@ -21,6 +21,12 @@ from ..research.news import NewsResult, NewsService
 
 # Layer weights. Quality is the largest single block but no longer a majority,
 # so a good business at a bad price cannot coast through on pedigree alone.
+#
+# The split also separates slow-moving from fast-moving evidence. Quality moves
+# quarterly with filings; valuation and timing move daily. Measured live, the
+# absolute composite shifts under ~1.5 points between runs on a normal day —
+# which is why the briefing looked frozen and why RELATIVE rank, not the absolute
+# score, is what the briefing should lead with. See `rank_reports`.
 QUALITY_WEIGHT = 0.45
 VALUATION_WEIGHT = 0.30
 TIMING_WEIGHT = 0.25
@@ -77,6 +83,13 @@ class ComprehensiveAnalysisReport:
     generated_at_utc: str
     news: NewsResult
     ai_research: AIResearchResult
+    # Percentile rank within the universe analysed in the same run (0-100,
+    # highest score = 100). Populated by `rank_reports`; 0 when scored alone.
+    universe_percentile: float = 0.0
+    universe_size: int = 0
+    # Percentile of this name's margin of safety among the run's reliably-valued
+    # names. -1 means unranked, which the valuation gate reads as "no opinion".
+    valuation_percentile: float = -1.0
 
 
 class OmniAlphaOrchestrator:
@@ -264,6 +277,55 @@ class OmniAlphaOrchestrator:
         workers = min(max(len(tickers), 1), 4)
         with ThreadPoolExecutor(max_workers=workers) as executor:
             reports = list(executor.map(self.analyze_single, tickers))
+        rank_reports(reports)
         # Sort descending by final composite score
         reports.sort(key=lambda r: r.final_composite_score, reverse=True)
         return reports
+
+
+def rank_reports(reports: Sequence[ComprehensiveAnalysisReport]) -> None:
+    """Assign each report its percentile rank within this run's universe.
+
+    The absolute composite is nearly static run to run: 45% of it comes from
+    quarterly filings, and measured live the whole score moves under ~1.5 points
+    on a normal day. A fixed 60-point entry line over a near-fixed score produces
+    a near-fixed briefing — which is exactly the "上周和今天完全一致" complaint.
+
+    Relative standing does move, because it depends on how every *other*
+    candidate scored today. A name that holds while its segment sells off climbs
+    the ranking even though its own score barely changed. That is also the more
+    honest question: "is this the best available use of capital right now",
+    rather than "did it clear an arbitrary constant".
+
+    Percentile is 0-100, highest score = 100. Mutates in place; the field is
+    informational and never overrides the absolute gates.
+    """
+
+    scored = [report for report in reports if report is not None]
+    if not scored:
+        return
+    ordered = sorted(scored, key=lambda r: r.final_composite_score)
+    total = len(ordered)
+    if total == 1:
+        ordered[0].universe_percentile = 100.0
+        ordered[0].universe_size = 1
+        ordered[0].valuation_percentile = 100.0
+        return
+    for index, report in enumerate(ordered):
+        report.universe_percentile = round(index / (total - 1) * 100.0, 1)
+        report.universe_size = total
+
+    # Valuation percentile, over the names whose valuation is trustworthy. An
+    # ETF or a company with no usable cash-flow history has no meaningful margin
+    # of safety, so including it would distort where everyone else ranks.
+    valued = [
+        report for report in ordered
+        if getattr(report.valuation, "is_reliable", True)
+    ]
+    if len(valued) < 2:
+        for report in ordered:
+            report.valuation_percentile = 100.0
+        return
+    by_margin = sorted(valued, key=lambda r: r.valuation.margin_of_safety_pct)
+    for index, report in enumerate(by_margin):
+        report.valuation_percentile = round(index / (len(by_margin) - 1) * 100.0, 1)

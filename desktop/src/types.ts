@@ -466,9 +466,13 @@ export interface BriefingIdea {
   news_label: string;
   news_article_count: number;
   news_available: boolean;
+  news_drivers?: Array<{ title: string; source: string; url: string }>;
   price_history?: Array<{ t: number; c: number }>;
   fifty_two_week_low: number;
   fifty_two_week_high: number;
+  universe_percentile?: number;
+  universe_size?: number;
+  valuation_percentile?: number;
 }
 
 export interface BriefingSegment {

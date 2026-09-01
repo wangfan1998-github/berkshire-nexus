@@ -277,21 +277,43 @@ class MastersDebateEngine:
         )
 
     def _get_mirror_test(self, sym: str, d: CompanyFinancials) -> str:
-        templates = {
-            "TSM": "1. TSMC is the world's sole contract manufacturer of sub-3nm chips.\n2. All AI chip designers are its paying customers, not competitors.\n3. Annual $30B+ CapEx ensures no competitor can realistically catch up.\n4. It possesses hard pricing power to pass on inflation.\n5. If the digital world needs compute, TSMC gets paid on every single wafer.",
-            "UBER": "1. Uber is the dominant global platform for moving people and food.\n2. Millions of drivers and riders create an insurmountable 2-sided network moat.\n3. The business has flipped into a $6B+ annual free cash flow machine.\n4. Autonomous vehicles need Uber's dispatch network to find paying riders.\n5. Trading at an attractive P/E (<18x) relative to its 15-20% compounding growth rate.",
-            "APP": "1. AppLovin operates the highest-converting mobile/e-commerce ad engine (AXON 2.0).\n2. It converts >50% of revenue directly into EBITDA and free cash flow.\n3. Management ruthlessly repurchases and retires shares with excess cash.\n4. However, it operates inside Apple and Google's operating system sandbox.\n5. Excellent high-beta satellite bet, but vulnerable to platform rule changes.",
-            "ADBE": "1. Adobe owns the gold standard creative formats (PSD, PDF) across global enterprises.\n2. Its 88% gross margin and subscription model create massive cash generation.\n3. The stock is currently penalized to a 10-year low valuation (P/E ~15.8x).\n4. Generative AI tools like Canva/Midjourney are pressuring entry-level user growth.\n5. High margin of safety value play, awaiting proof that Firefly defends enterprise moat.",
-            "SOFI": "1. SoFi is a fast-growing digital financial app with high member growth.\n2. However, its core profits still depend on holding and originating consumer debt.\n3. Money is a commodity and lacks true technological or network switching moats.\n4. High credit risk during economic downturns and rate uncertainty.\n5. Trading at an elevated P/E (>38x) for what is fundamentally a banking business."
-        }
-        return templates.get(sym, f"1. {sym} operates in {d.sector}.\n2. Revenue growth is {d.revenue_growth_yoy*100:.1f}% with gross margin of {d.gross_margin*100:.1f}%.\n3. P/E ratio is {d.pe:.1f}x with ROE of {d.roe*100:.1f}%.\n4. Free cash flow yield is {d.fcf_yield*100:.1f}%.\n5. Need to confirm sustainable 10-year competitive advantage.")
+        """Duan Yongping's mirror test, generated from the company's own numbers.
+
+        Hand-written five-liners for five tickers used to sit here. They read far
+        better than anything derived, which was the danger: a confident paragraph
+        about TSMC's 2nm ramp was frozen prose that never updated when the
+        financials moved, and every other symbol got a generic stub. Prose that
+        cannot go stale is prose tied to the data.
+        """
+
+        moat = "定价权明确" if d.gross_margin >= 0.5 else (
+            "有一定差异化" if d.gross_margin >= 0.35 else "产品接近同质化"
+        )
+        cash = "现金创造稳定" if d.fcf_yield >= 0.04 else "现金回报有限"
+        return (
+            f"1. {sym} 属于 {d.sector or '未分类行业'}，{moat}（毛利率 {d.gross_margin*100:.1f}%）。\n"
+            f"2. 营收增速 {d.revenue_growth_yoy*100:.1f}%，营业利润率 {d.operating_margin*100:.1f}%。\n"
+            f"3. ROE {d.roe*100:.1f}%，负债/权益 {d.debt_to_equity:.2f}。\n"
+            f"4. 自由现金流收益率 {d.fcf_yield*100:.1f}%，{cash}。\n"
+            f"5. 当前 P/E {d.pe:.1f}x —— 需确认十年后这门生意是否还在同一位置。"
+        )
 
     def _get_inversion(self, sym: str, d: CompanyFinancials) -> str:
-        inversions = {
-            "TSM": "Geopolitical conflict in the Taiwan Strait; catastrophic operational delay in 2nm ramp-up; severe margin collapse from overseas fabs.",
-            "UBER": "Tesla or Waymo successfully building an independent consumer ride-hailing app with zero commission, disintermediating Uber; extreme regulatory labor reclassification.",
-            "APP": "Apple or Google introducing restrictive mobile tracking policies that blind AXON 2.0 attribution; Meta Advantage+ offering free superior ad conversion.",
-            "ADBE": "GenAI generative models making pixel-level editing obsolete; enterprise creatives migrating en masse to native browser-based AI suites.",
-            "SOFI": "Macro credit shock triggering soaring consumer loan default rates; capital adequacy ratio falling below regulatory requirements; deposit outflow."
-        }
-        return inversions.get(sym, "Technological obsolescence, loss of pricing power, aggressive leverage, or governance failures.")
+        """Munger inversion: name the failure paths this company's numbers imply."""
+
+        paths: List[str] = []
+        if d.debt_to_equity > 1.5:
+            paths.append(f"负债/权益 {d.debt_to_equity:.2f}，再融资窗口关闭时被迫贱卖资产")
+        if d.operating_margin < 0.10:
+            paths.append(f"营业利润率仅 {d.operating_margin*100:.1f}%，需求走弱即转亏")
+        if d.pe > 40:
+            paths.append(f"P/E {d.pe:.1f}x 已定价完美执行，一次不及预期即杀估值")
+        if d.beta > 1.8:
+            paths.append(f"Beta {d.beta:.2f}，系统性回撤中跌幅会被放大")
+        if d.revenue_growth_yoy < 0.0:
+            paths.append(f"营收同比 {d.revenue_growth_yoy*100:.1f}%，主业已在收缩")
+        if d.gross_margin < 0.30:
+            paths.append(f"毛利率 {d.gross_margin*100:.1f}%，缺乏抵御价格战的缓冲")
+        if not paths:
+            paths.append("财务指标未显示明确致死路径，风险主要来自技术替代与竞争格局变化")
+        return "；".join(paths) + "。"
