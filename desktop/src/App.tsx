@@ -501,6 +501,10 @@ function Dashboard({
   const unrealised = account.unrealised_pnl ?? 0;
   const unrealisedPct = account.unrealised_pnl_pct ?? 0;
   const incomplete = account.positions.filter((item) => item.cost_complete === false);
+  // Holdings with no usable quote are excluded from P&L entirely, so the figure
+  // above describes only part of the book. Name them rather than letting a
+  // partial number read as the whole portfolio.
+  const unpriced = account.unpriced_tickers ?? [];
   const donutRows: Slice[] = [
     ...account.positions
       .filter((item) => item.market_value > 0.01)
@@ -664,6 +668,13 @@ function Dashboard({
         {account.positions.some((p) => p.price_unreliable) && (
           <p className="warn-note">
             ~ 标记的标的价差过大且取不到交易所价格，该现价为估算值，市值与收益率会有偏差。
+          </p>
+        )}
+        {unpriced.length > 0 && (
+          <p className="warn-note">
+            {unpriced.join("、")} 暂时取不到报价，已<strong>排除</strong>在浮动盈亏之外
+            （共 {unpriced.length} / {account.positions.length} 项）。
+            取不到价不等于价值为零；行情流按符号轮播推送，多刷新几次即可补全。
           </p>
         )}
         {incomplete.length > 0 && (

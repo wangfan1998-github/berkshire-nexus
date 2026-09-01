@@ -343,7 +343,7 @@ class DesktopService:
             position["cost_covered_quantity"] = covered
             complete = bool(average_cost > 0.0 and covered >= quantity - 1e-6)
             position["cost_complete"] = complete
-            if average_cost > 0.0:
+            if average_cost > 0.0 and price > 0.0:
                 # P&L must be computed on the quantity whose cost is actually
                 # known. Multiplying the average by the FULL holding invents cost
                 # for uncovered shares and overstates the absolute gain/loss —
@@ -357,9 +357,16 @@ class DesktopService:
                 total_cost += cost_value
                 priced_market_value += priced_quantity * price
             else:
+                # No usable price means the position's value is unknown, not
+                # zero. Treating a missing quote as a total loss made a portfolio
+                # down 1.4% report -75%: seven of eleven holdings had no stream
+                # price, so their entire cost basis counted against a market
+                # value of zero. Exclude them from P&L and say so.
                 position["cost_value"] = 0.0
                 position["unrealised_pnl"] = 0.0
                 position["return_pct"] = 0.0
+                if price <= 0.0:
+                    position["price_unknown"] = True
             realised_total += float(book.get("realised_pnl", 0.0))
 
         cash = float(account.get("cash", 0.0))
@@ -389,6 +396,11 @@ class DesktopService:
                 (priced_market_value / total_cost - 1.0) * 100.0 if total_cost > 0.0 else 0.0
             ),
             "priced_market_value": priced_market_value,
+            # How much of the book the P&L above actually covers. Without this a
+            # figure derived from 4 of 11 holdings looks like the whole picture.
+            "unpriced_tickers": [
+                str(p.get("ticker", "")) for p in positions if p.get("price_unknown")
+            ],
             "realised_pnl": realised_total,
             "earn": earn,
             "earn_total_usdt": earn_total,

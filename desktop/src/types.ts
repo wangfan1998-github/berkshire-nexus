@@ -339,6 +339,8 @@ export interface LiveAccount {
   unrealised_pnl?: number;
   unrealised_pnl_pct?: number;
   realised_pnl?: number;
+  /** Holdings with no usable quote; excluded from the P&L figures above. */
+  unpriced_tickers?: string[];
   wallet_totals?: Array<{ wallet: string; balance_btc: number; active: boolean }>;
   positions: LivePosition[];
   open_orders: LiveOrder[];
