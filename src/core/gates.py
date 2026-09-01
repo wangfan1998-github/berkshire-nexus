@@ -29,10 +29,10 @@ CHASE_RANGE_PCT = 92.0
 ETF_POSITION_CAP_PCT = 30.0
 
 # Entry may be granted on relative standing when the absolute line is not met.
-# A name must sit in the top quartile of the day's analysed universe.
-TOP_QUANTILE_PCT = 75.0
-# Ranking is meaningless on a handful of names — "top quartile of 3" is one
-# ticker chosen by rounding. Below this, only the absolute test applies.
+# A name must sit in the top 30% of the day's analysed universe.
+TOP_QUANTILE_PCT = 70.0
+# Ranking is meaningless on a handful of names — "top 30% of 3" is one ticker
+# chosen by rounding. Below this, only the absolute test applies.
 MIN_RANKED_UNIVERSE = 8
 
 # Valuation gate. The percentile floor is the working constraint; the absolute

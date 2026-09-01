@@ -153,7 +153,7 @@ def classify_action(
     not make it. Position caps come from the risk assessment, not the model.
 
     Entry is granted on **either** an absolute score above ``minimum_score`` or a
-    top-quantile rank within today's universe. A fixed line alone is a bet that
+    top-30% rank within today's universe. A fixed line alone is a bet that
     the constant is calibrated to the market: measured live across 16 AI-chain
     names, every one scored below 60 once the DCF was corrected, so a pure
     absolute test emitted zero ideas every single day and the briefing was

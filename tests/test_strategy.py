@@ -161,7 +161,7 @@ class RankingTests(unittest.TestCase):
         self.assertTrue(all(r.universe_size == 10 for r in reports))
 
     def test_rank_entry_requires_a_real_cross_section(self):
-        """Top quartile of three names is an artefact of rounding, not a signal."""
+        """Top 30% of three names is an artefact of rounding, not a signal."""
 
         few = [_report(f"T{i}", score=50.0 + i) for i in range(3)]
         rank_reports(few)
@@ -193,9 +193,9 @@ class EntryGateTests(unittest.TestCase):
         report.valuation_percentile = 80.0
         self.assertEqual(valuation_block_reason(report), "")
 
-        cheapest_quartile_miss = _report(mos=-40.0)
-        cheapest_quartile_miss.valuation_percentile = 5.0
-        self.assertIn("分位", valuation_block_reason(cheapest_quartile_miss))
+        cheap_rank_miss = _report(mos=-40.0)
+        cheap_rank_miss.valuation_percentile = 5.0
+        self.assertIn("分位", valuation_block_reason(cheap_rank_miss))
 
     def test_absolute_floor_still_catches_a_broken_dcf(self):
         report = _report(mos=-400.0)
@@ -209,7 +209,7 @@ class EntryGateTests(unittest.TestCase):
 
 
 class BriefingDecisionTests(unittest.TestCase):
-    def test_top_quartile_name_can_enter_below_the_absolute_line(self):
+    def test_top_ranked_name_can_enter_below_the_absolute_line(self):
         reports = [_report(f"T{i}", score=40.0 + i, mos=5.0) for i in range(12)]
         rank_reports(reports)
         best = max(reports, key=lambda r: r.final_composite_score)
