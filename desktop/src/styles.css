@@ -268,6 +268,18 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .data-table.compact th:first-child,
 .data-table.compact td:first-child { padding-left: 0; }
 
+/* The technical verdict is the layer's conclusion, not another data row — give
+   it the visual weight of a quote so it reads before the bullet list below. */
+.technical-verdict {
+  margin: 8px 0 10px;
+  padding: 9px 12px;
+  font-size: 11px;
+  line-height: 1.75;
+  color: var(--ink);
+  background: var(--paper-deep);
+  border-left: 2px solid var(--muted);
+}
+
 .muted-note { margin: 10px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .warn-note { margin: 10px 0 0; padding: 9px 11px; color: var(--amber); font-size: 10px; line-height: 1.6; background: var(--amber-soft); border-left: 2px solid var(--amber); }
 /* Paragraphs inside a note carry the note's own spacing, so they must not add

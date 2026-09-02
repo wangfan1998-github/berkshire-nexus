@@ -208,7 +208,12 @@ class DataFetcher:
 
         beta_started = time.monotonic()
         try:
-            beta = self._calculate_beta(sym, chart_history)
+            # Beta is conventionally a trailing-1-year measure, and the chart now
+            # returns 3 years. Slice to the most recent ~252 sessions so widening
+            # the window for weekly indicators does not silently redefine beta —
+            # and with it every CAPM discount rate in the valuation engine.
+            beta_window = (chart_history[0][-252:], chart_history[1][-252:])
+            beta = self._calculate_beta(sym, beta_window)
             if beta is not None:
                 data["beta"] = beta
                 trace.append(self._trace(
@@ -315,7 +320,12 @@ class DataFetcher:
             net_income=float(data.get("net_income") or 0.0),
             shareholders_equity=float(data.get("shareholders_equity") or 0.0),
             industry=str(data.get("industry") or ""),
-            price_history=_downsample_history(chart_history, 60),
+            # Sparkline stays a 1-year view: the UI labels it "一年走势" and draws
+            # it against the 52-week high/low, so feeding it the full 3-year
+            # series would silently mislabel the chart.
+            price_history=_downsample_history(
+                (chart_history[0][-252:], chart_history[1][-252:]), 60
+            ),
             operating_cash_flow_history=[
                 float(value) for value in (data.get("operating_cash_flow_history") or [])
             ],
@@ -356,9 +366,13 @@ class DataFetcher:
 
     def _yahoo_chart(self, ticker: str) -> Tuple[Dict[str, Any], Tuple[List[int], List[float]]]:
         encoded = urllib.parse.quote(ticker, safe="")
+        # 3 years, not 1. Weekly indicators need ~150 weekly bars to warm up a
+        # weekly MACD and EMA60; a 1-year window folds to only ~50 weeks, which
+        # cannot form them. Verified live: 1y=252 daily bars, 3y=751 (~150 weeks).
+        # Beta still uses the trailing 1-year slice — see `_calculate_beta`.
         url = (
             "https://query1.finance.yahoo.com/v8/finance/chart/"
-            f"{encoded}?range=1y&interval=1d&events=div%2Csplits"
+            f"{encoded}?range=3y&interval=1d&events=div%2Csplits"
         )
         payload = self._json(url, self.headers)
         result = list(payload.get("chart", {}).get("result") or [])

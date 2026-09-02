@@ -154,16 +154,30 @@ def technical_block_reason(report: ComprehensiveAnalysisReport) -> str:
         # failing open — a gate that raises would abort the whole briefing.
         return ""
 
-    if (
-        signals.macd_cross == "death"
-        and isinstance(signals.macd_cross_age, int)
-        and signals.macd_cross_age <= 3
-        and signals.macd_above_zero is False
-    ):
+    if signals.macd_cross == "death" and isinstance(signals.macd_cross_age, int) \
+            and signals.macd_cross_age <= 3 and signals.macd_above_zero is False:
         return (
             f"MACD {signals.macd_cross_age} 天前死叉且在零轴下方，"
             "趋势转弱，等结构修复再看"
         )
+
+    # Structural breakdowns. A range break or a lost long-term average is an
+    # event, and acting against a fresh one is the definition of catching a knife.
+    if signals.breakout_state == "breakdown":
+        level = signals.breakout_level
+        return (
+            f"已跌破 60 日区间低点"
+            + (f" {level:.2f}" if isinstance(level, (int, float)) else "")
+            + "，下方缺乏支撑，等止跌确认"
+        )
+
+    if signals.ema_slow_break == "lost":
+        return "刚失守 EMA129 长期均线，趋势结构受损，等收复再看"
+
+    # Both timeframes pointing down is the strongest reason to stand aside: a
+    # daily bounce inside a weekly downtrend is not an entry.
+    if signals.timeframe_agreement == "aligned_bear":
+        return "日线与周线同步空头排列，趋势向下且两个周期一致，不逆势买入"
 
     adx = signals.adx if isinstance(signals.adx, (int, float)) else None
     if signals.trend_alignment == "bearish" and adx is not None and adx >= 25.0:

@@ -124,6 +124,21 @@ class BriefingIdea:
     ma_cross_age: Optional[int] = None
     volume_ratio: Optional[float] = None
     technical_notes: List[str] = field(default_factory=list)
+    # The actionable read: stance, the level that matters, what voids it.
+    technical_verdict: str = ""
+    breakout_state: str = ""
+    breakout_level: Optional[float] = None
+    breakout_distance_pct: Optional[float] = None
+    range_position_pct: Optional[float] = None
+    ema_mid_break: str = ""
+    ema_slow_break: str = ""
+    divergence: str = ""
+    weekly_trend_alignment: str = ""
+    weekly_macd_cross: str = ""
+    weekly_macd_cross_age: Optional[int] = None
+    weekly_rsi: Optional[float] = None
+    weekly_bars: int = 0
+    timeframe_agreement: str = ""
 
 
 @dataclass
@@ -330,10 +345,15 @@ BRIEFING_PROMPT = """基于以下证据，为今日 AI 产业链埋伏给出结�
 - 已持仓的标的必须结合成本价和浮动盈亏来判断加仓还是减仓。
 - social_* 字段是 Reddit 关注度，只能当拥挤度/情绪指标；社交热度高不构成买入理由，
   反而要提示接盘风险（对 51 个财经大V 约 1.8 万条预测的审计显示方向准确率仅 45%）。
-- technical 字段是日线技术结构（EMA5/60/129、MACD、RSI、ADX、ATR）。基本面决定"买什么"，
-  技术面决定"现在是不是买点"——两者冲突时必须明说，不要含糊成"可以关注"。
-  ADX < 20 时均线与金叉死叉信号可靠度低，要降低对技术信号的权重。
+- technical 字段是日线+周线技术结构。基本面决定"买什么"，技术面决定"现在是不是买点"，
+  两者冲突时必须明说，不要含糊成"可以关注"。
+  timeframe_agreement 最重要：日线周线同向时信号可靠，conflict 时要明确指出这只是
+  下跌趋势中的反弹或上涨趋势中的回调，不能当成趋势入场。
+  breakout_state / ema129_break 是结构性事件（突破、破位、失守长期均线），
+  优先于指标数值；突破需要 volume_ratio ≥ 1.5 才算量能确认，否则要提示假突破风险。
+  ADX < 20 时均线与金叉死叉可靠度低，要降低技术信号权重。
   RSI 超买在强趋势中是常态，不要单独当卖出理由。
+  divergence 是预警而非信号，可以持续很久，不要据此直接看空。
 - 证据不足就直说，conviction 用 low。
 - citations 只能引用上面出现过的 evidence_id，不得编造。
 """
@@ -369,6 +389,20 @@ def _technical_fields(signals: Optional[Any]) -> Dict[str, Any]:
         "ma_cross_age": signals.ma_cross_age,
         "volume_ratio": signals.volume_ratio,
         "technical_notes": list(signals.notes),
+        "technical_verdict": signals.verdict,
+        "breakout_state": signals.breakout_state,
+        "breakout_level": signals.breakout_level,
+        "breakout_distance_pct": signals.breakout_distance_pct,
+        "range_position_pct": signals.range_position_pct,
+        "ema_mid_break": signals.ema_mid_break,
+        "ema_slow_break": signals.ema_slow_break,
+        "divergence": signals.divergence,
+        "weekly_trend_alignment": signals.weekly_trend_alignment,
+        "weekly_macd_cross": signals.weekly_macd_cross,
+        "weekly_macd_cross_age": signals.weekly_macd_cross_age,
+        "weekly_rsi": signals.weekly_rsi,
+        "weekly_bars": signals.weekly_bars,
+        "timeframe_agreement": signals.timeframe_agreement,
     }
 
 
@@ -571,7 +605,16 @@ class BriefingComposer:
                     # moment" instead of only reasoning about fundamentals.
                     "technical": {
                         "score": idea.technical_score,
-                        "trend_alignment": idea.trend_alignment,
+                        "verdict": idea.technical_verdict,
+                        "daily_trend": idea.trend_alignment,
+                        "weekly_trend": idea.weekly_trend_alignment,
+                        "timeframe_agreement": idea.timeframe_agreement,
+                        "breakout_state": idea.breakout_state,
+                        "breakout_level": idea.breakout_level,
+                        "range_position_pct": idea.range_position_pct,
+                        "ema129_break": idea.ema_slow_break,
+                        "ema60_break": idea.ema_mid_break,
+                        "divergence": idea.divergence,
                         "ema_stack": {
                             "ema5": idea.ema_fast,
                             "ema60": idea.ema_mid,
@@ -581,8 +624,10 @@ class BriefingComposer:
                         "macd_cross": idea.macd_cross,
                         "macd_cross_age_days": idea.macd_cross_age,
                         "macd_histogram": idea.macd_histogram,
+                        "weekly_macd_cross": idea.weekly_macd_cross,
                         "rsi": idea.rsi,
                         "rsi_zone": idea.rsi_zone,
+                        "weekly_rsi": idea.weekly_rsi,
                         "adx": idea.adx,
                         "atr_pct": idea.atr_pct,
                         "ma_cross": idea.ma_cross,

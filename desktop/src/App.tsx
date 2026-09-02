@@ -248,6 +248,19 @@ const RSI_LABEL: Record<string, string> = {
   neutral: "中性",
 };
 
+/** Whether daily and weekly agree — the most decision-relevant field. */
+const AGREEMENT_LABEL: Record<string, string> = {
+  aligned_bull: "日周线同向多头",
+  aligned_bear: "日周线同向空头",
+  conflict: "日周线冲突",
+};
+
+const AGREEMENT_TONE: Record<string, "good" | "warn" | "risk" | "neutral"> = {
+  aligned_bull: "good",
+  aligned_bear: "risk",
+  conflict: "warn",
+};
+
 const TASK_LABEL: Record<string, string> = {
   briefing: "生成日报",
   "live-account": "读取账户",
@@ -941,7 +954,33 @@ function BriefingPage({
                       )}
                       {idea.technical_available && (
                         <>
-                          <p><strong>技术面（日线）</strong></p>
+                          <p><strong>技术面（日线 + 周线）</strong></p>
+                          {idea.technical_verdict && (
+                            <p className="technical-verdict">{idea.technical_verdict}</p>
+                          )}
+                          {idea.timeframe_agreement && (
+                            <p>
+                              <StatusMark tone={AGREEMENT_TONE[idea.timeframe_agreement] ?? "neutral"}>
+                                {AGREEMENT_LABEL[idea.timeframe_agreement] ?? ""}
+                              </StatusMark>
+                              {idea.breakout_state && (
+                                <StatusMark tone={idea.breakout_state === "breakout" ? "good" : "risk"}>
+                                  {idea.breakout_state === "breakout" ? "突破" : "破位"}
+                                  {idea.breakout_level != null && ` ${money.format(idea.breakout_level)}`}
+                                </StatusMark>
+                              )}
+                              {idea.ema_slow_break && (
+                                <StatusMark tone={idea.ema_slow_break === "reclaimed" ? "good" : "risk"}>
+                                  {idea.ema_slow_break === "reclaimed" ? "收复 EMA129" : "失守 EMA129"}
+                                </StatusMark>
+                              )}
+                              {idea.divergence && (
+                                <StatusMark tone={idea.divergence === "bearish" ? "warn" : "neutral"}>
+                                  {idea.divergence === "bearish" ? "顶背离" : "底背离"}
+                                </StatusMark>
+                              )}
+                            </p>
+                          )}
                           <ul>
                             {(idea.technical_notes ?? []).map((note, index) => (
                               <li key={index}>{note}</li>
@@ -953,6 +992,7 @@ function BriefingPage({
                                 <th>EMA5</th><th>EMA60</th><th>EMA129</th>
                                 <th>MACD</th><th>信号</th><th>柱</th>
                                 <th>RSI</th><th>ADX</th><th>ATR</th>
+                                <th>区间</th><th>周线</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -975,6 +1015,16 @@ function BriefingPage({
                                 </td>
                                 <td>{idea.adx?.toFixed(1) ?? "—"}</td>
                                 <td>{idea.atr_pct != null ? `${idea.atr_pct.toFixed(1)}%` : "—"}</td>
+                                <td>
+                                  {idea.range_position_pct != null
+                                    ? `${idea.range_position_pct.toFixed(0)}%` : "—"}
+                                </td>
+                                <td className={TREND_TONE[idea.weekly_trend_alignment ?? ""] ?? ""}>
+                                  {TREND_LABEL[idea.weekly_trend_alignment ?? ""] ?? "—"}
+                                  {idea.weekly_rsi != null && (
+                                    <span className="muted"> {idea.weekly_rsi.toFixed(0)}</span>
+                                  )}
+                                </td>
                               </tr>
                             </tbody>
                           </table>

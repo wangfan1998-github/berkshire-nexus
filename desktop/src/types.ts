@@ -493,6 +493,20 @@ export interface BriefingIdea {
   ma_cross_age?: number | null;
   volume_ratio?: number | null;
   technical_notes?: string[];
+  technical_verdict?: string;
+  breakout_state?: string;
+  breakout_level?: number | null;
+  breakout_distance_pct?: number | null;
+  range_position_pct?: number | null;
+  ema_mid_break?: string;
+  ema_slow_break?: string;
+  divergence?: string;
+  weekly_trend_alignment?: string;
+  weekly_macd_cross?: string;
+  weekly_macd_cross_age?: number | null;
+  weekly_rsi?: number | null;
+  weekly_bars?: number;
+  timeframe_agreement?: string;
 }
 
 export interface BriefingSegment {

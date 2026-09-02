@@ -375,6 +375,129 @@ class TechnicalGateTests(unittest.TestCase):
         self.assertIn("空头排列", entry_block_reason(etf))
 
 
+class StructuralAnalysisTests(unittest.TestCase):
+    """Breakouts, breakdowns, MA breaks, divergence, and the weekly timeframe.
+
+    These are the "analysis" half of the technical layer: an indicator value is
+    context, but a range break or a lost long-term average is an event.
+    """
+
+    @staticmethod
+    def _range(bars: int = 100, level: float = 100.0, amplitude: float = 2.0) -> list:
+        return [level + (amplitude if i % 2 else -amplitude) for i in range(bars)]
+
+    def _ohlc(self, closes: list) -> tuple:
+        return [c * 1.01 for c in closes], [c * 0.99 for c in closes]
+
+    def test_breakout_above_the_recent_range_is_detected(self):
+        closes = self._range() + [104.0, 106.0, 108.0]
+        highs, lows = self._ohlc(closes)
+        info = ta._level_break(closes, highs, lows)
+        self.assertEqual(info["state"], "breakout")
+        self.assertGreater(info["distance_pct"], 0.0)
+
+    def test_breakdown_below_the_recent_range_is_detected(self):
+        closes = self._range() + [96.0, 94.0, 92.0]
+        highs, lows = self._ohlc(closes)
+        info = ta._level_break(closes, highs, lows)
+        self.assertEqual(info["state"], "breakdown")
+        self.assertLess(info["distance_pct"], 0.0)
+
+    def test_price_inside_the_range_is_not_a_break(self):
+        closes = self._range()
+        highs, lows = self._ohlc(closes)
+        self.assertEqual(ta._level_break(closes, highs, lows)["state"], "")
+
+    def test_range_position_stays_within_zero_and_one_hundred(self):
+        """A genuine breakout puts price outside the measured range.
+
+        The raw ratio then exceeds 100 (measured: 183%), which would render as a
+        nonsensical "183% percentile" in the UI.
+        """
+
+        closes = self._range() + [130.0, 140.0, 150.0]
+        highs, lows = self._ohlc(closes)
+        position = ta._level_break(closes, highs, lows)["range_position_pct"]
+        self.assertIsNotNone(position)
+        self.assertLessEqual(position, 100.0)
+        self.assertGreaterEqual(position, 0.0)
+
+    def test_losing_a_moving_average_is_reported_only_when_it_sticks(self):
+        # Crosses down 2 bars ago and closes well clear of the line.
+        decisive = [100.0 + i * 0.5 for i in range(150)] + [
+            175.0, 172.0, 169.0, 166.0, 163.0, 160.0, 157.0,
+        ]
+        line = ta.ema_series(decisive, 60)
+        self.assertEqual(ta._ma_break(decisive, line), "lost")
+
+    def test_oscillating_around_a_flat_average_is_not_a_break(self):
+        """Price sitting on the line reported a fresh reclaim every other bar."""
+
+        flat = [100.0 + (1.0 if i % 2 else -1.0) * 0.05 for i in range(200)]
+        line = ta.ema_series(flat, 60)
+        self.assertEqual(ta._ma_break(flat, line), "")
+
+    def test_bearish_divergence_needs_a_material_price_advance(self):
+        closes = []
+        value = 100.0
+        for _ in range(60):
+            value *= 1.008
+            closes.append(value)
+        for _ in range(20):
+            value *= 0.994
+            closes.append(value)
+        for _ in range(60):
+            value *= 1.0022
+            closes.append(value)
+        _, _, histogram = ta.macd_series(closes)
+        self.assertEqual(ta._divergence(closes, histogram), "bearish")
+
+    def test_divergence_is_rare_on_a_clean_trend(self):
+        """Loose thresholds flagged 4 of 14 live names — noise, not a warning."""
+
+        steady = [100.0 * (1.004 ** i) for i in range(150)]
+        _, _, histogram = ta.macd_series(steady)
+        self.assertEqual(ta._divergence(steady, histogram), "")
+
+    def test_weekly_folding_keeps_the_latest_week_intact(self):
+        """Grouping runs backwards, so a partial oldest week cannot shift boundaries."""
+
+        closes = [float(i) for i in range(1, 53)]  # 52 bars -> 10 full weeks + 2
+        weekly = ta.to_weekly(closes)
+        self.assertEqual(len(weekly["closes"]), 10)
+        # The final weekly close must be the final daily close.
+        self.assertEqual(weekly["closes"][-1], closes[-1])
+
+    def test_weekly_aggregation_uses_high_low_and_summed_volume(self):
+        closes = [10.0, 11.0, 12.0, 11.5, 11.8]
+        highs = [10.5, 11.5, 12.5, 12.0, 12.2]
+        lows = [9.5, 10.5, 11.0, 11.0, 11.2]
+        volumes = [100.0] * 5
+        weekly = ta.to_weekly(closes, highs, lows, volumes)
+        self.assertEqual(weekly["highs"], [12.5])
+        self.assertEqual(weekly["lows"], [9.5])
+        self.assertEqual(weekly["volumes"], [500.0])
+
+    def test_timeframe_conflict_reduces_conviction(self):
+        """The same daily signal means opposite things under opposing weeklies."""
+
+        base = TechnicalSignals(ticker="X", bars=252, technical_score=50.0)
+        base.trend_alignment = "bullish"
+        base.weekly_trend_alignment = "bearish"
+        self.assertEqual(ta._agreement(base), "conflict")
+        base.weekly_trend_alignment = "bullish"
+        self.assertEqual(ta._agreement(base), "aligned_bull")
+
+    def test_verdict_states_a_stance_and_an_invalidation_level(self):
+        rising = [100.0 * (1.004 ** i) for i in range(400)]
+        highs = [c * 1.01 for c in rising]
+        lows = [c * 0.99 for c in rising]
+        signals = ta.analyse(rising, highs, lows, [1e6] * 400, ticker="UP")
+        self.assertTrue(signals.verdict)
+        # A technical call without a level that voids it is not a call.
+        self.assertIn("失效", signals.verdict + signals.verdict)
+
+
 class BriefingDecisionTests(unittest.TestCase):
     def test_top_ranked_name_can_enter_below_the_absolute_line(self):
         reports = [_report(f"T{i}", score=40.0 + i, mos=5.0) for i in range(12)]
