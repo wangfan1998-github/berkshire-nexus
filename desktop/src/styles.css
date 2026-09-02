@@ -257,6 +257,16 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .data-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .data-table tbody tr:hover { background: var(--paper-deep); }
 .data-table td.mono { font-family: var(--mono); font-weight: 600; }
+/* The technical row sets `mono` on the <tr>, so inherit down to its cells —
+   `td.mono` alone would not match it. */
+.data-table tr.mono td { font-family: var(--mono); font-weight: 600; }
+/* Nine indicator columns in the width of a card: tighten padding and let the
+   numbers sit centred so the row reads as a table of readings, not prose. */
+.data-table.compact { font-size: 9px; }
+.data-table.compact th,
+.data-table.compact td { padding: 6px 5px; text-align: center; white-space: nowrap; }
+.data-table.compact th:first-child,
+.data-table.compact td:first-child { padding-left: 0; }
 
 .muted-note { margin: 10px 0 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .warn-note { margin: 10px 0 0; padding: 9px 11px; color: var(--amber); font-size: 10px; line-height: 1.6; background: var(--amber-soft); border-left: 2px solid var(--amber); }
@@ -406,8 +416,11 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
    absorbing slack and squeezing the metrics. */
 .idea-head {
   display: grid;
-  grid-template-columns: minmax(180px, 232px) repeat(4, 1fr) 92px 14px;
-  gap: 0 24px;
+  /* One track per direct child: label block, 5 value cells (分/动量/技术/现价/成本),
+     sparkline, chevron. The count must match the JSX — a mismatch silently
+     pushes the sparkline into the chevron's track. */
+  grid-template-columns: minmax(180px, 232px) repeat(5, 1fr) 92px 14px;
+  gap: 0 18px;
   align-items: center;
   width: 100%;
   padding: 13px 18px;

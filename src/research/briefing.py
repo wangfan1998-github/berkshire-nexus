@@ -29,6 +29,7 @@ from ..core.gates import (
     MIN_RANKED_UNIVERSE,
     TOP_QUANTILE_PCT,
     chase_reason as _chase_reason,
+    technical_block_reason,
     valuation_block_reason,
 )
 from ..data.attention import AttentionResult, BuzzEntry, NewsSentiment, crowding_note
@@ -101,6 +102,28 @@ class BriefingIdea:
     universe_percentile: float = 0.0
     universe_size: int = 0
     valuation_percentile: float = -1.0
+    # Technical layer: chart structure over the daily series. Reported alongside
+    # the fundamental read so a call can be attributed to one or the other.
+    technical_score: Optional[float] = None
+    technical_available: bool = False
+    ema_fast: Optional[float] = None
+    ema_mid: Optional[float] = None
+    ema_slow: Optional[float] = None
+    price_vs_slow_pct: Optional[float] = None
+    macd: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_histogram: Optional[float] = None
+    macd_cross: str = ""
+    macd_cross_age: Optional[int] = None
+    rsi: Optional[float] = None
+    rsi_zone: str = ""
+    adx: Optional[float] = None
+    atr_pct: Optional[float] = None
+    trend_alignment: str = ""
+    ma_cross: str = ""
+    ma_cross_age: Optional[int] = None
+    volume_ratio: Optional[float] = None
+    technical_notes: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -196,7 +219,13 @@ def classify_action(
         if chase:
             reasons.append(chase)
             return ("HOLD" if held else "AVOID"), reasons
-        reasons.append("估值与基本面引擎对指数不适用，仅依据仓位与价格位置")
+        # Chart structure is the one language that applies to an index as much as
+        # to a company, so the technical gate is not skipped for an ETF.
+        technical = technical_block_reason(report)
+        if technical:
+            reasons.append(technical)
+            return ("HOLD" if held else "AVOID"), reasons
+        reasons.append("估值与基本面引擎对指数不适用，仅依据仓位、价格位置与技术结构")
         return ("HOLD" if held else "ADD"), reasons
 
     if score < minimum_score and not qualifies_on_rank:
@@ -224,6 +253,14 @@ def classify_action(
     chase = _chase_reason(report, buzz)
     if chase:
         reasons.append(chase)
+        return ("HOLD" if held else "AVOID"), reasons
+
+    # Chart structure: a fresh death cross or a confirmed bearish stack blocks an
+    # entry regardless of how good the business is. Fundamentals say what to own;
+    # technicals say whether today is the day.
+    technical = technical_block_reason(report)
+    if technical:
+        reasons.append(technical)
         return ("HOLD" if held else "AVOID"), reasons
 
     # A negative margin of safety means the DCF says it is already expensive.
@@ -293,9 +330,46 @@ BRIEFING_PROMPT = """基于以下证据，为今日 AI 产业链埋伏给出结�
 - 已持仓的标的必须结合成本价和浮动盈亏来判断加仓还是减仓。
 - social_* 字段是 Reddit 关注度，只能当拥挤度/情绪指标；社交热度高不构成买入理由，
   反而要提示接盘风险（对 51 个财经大V 约 1.8 万条预测的审计显示方向准确率仅 45%）。
+- technical 字段是日线技术结构（EMA5/60/129、MACD、RSI、ADX、ATR）。基本面决定"买什么"，
+  技术面决定"现在是不是买点"——两者冲突时必须明说，不要含糊成"可以关注"。
+  ADX < 20 时均线与金叉死叉信号可靠度低，要降低对技术信号的权重。
+  RSI 超买在强趋势中是常态，不要单独当卖出理由。
 - 证据不足就直说，conviction 用 low。
 - citations 只能引用上面出现过的 evidence_id，不得编造。
 """
+
+
+def _technical_fields(signals: Optional[Any]) -> Dict[str, Any]:
+    """Flatten TechnicalSignals onto the idea's technical fields.
+
+    Returns the defaults when the reading is unavailable, so a short-history
+    ticker renders as "no technical data" rather than as a neutral chart.
+    """
+
+    if signals is None or not getattr(signals, "available", False):
+        return {"technical_available": False}
+    return {
+        "technical_score": signals.technical_score,
+        "technical_available": True,
+        "ema_fast": signals.ema_fast,
+        "ema_mid": signals.ema_mid,
+        "ema_slow": signals.ema_slow,
+        "price_vs_slow_pct": signals.price_vs_slow_pct,
+        "macd": signals.macd,
+        "macd_signal": signals.macd_signal,
+        "macd_histogram": signals.macd_histogram,
+        "macd_cross": signals.macd_cross,
+        "macd_cross_age": signals.macd_cross_age,
+        "rsi": signals.rsi,
+        "rsi_zone": signals.rsi_zone,
+        "adx": signals.adx,
+        "atr_pct": signals.atr_pct,
+        "trend_alignment": signals.trend_alignment,
+        "ma_cross": signals.ma_cross,
+        "ma_cross_age": signals.ma_cross_age,
+        "volume_ratio": signals.volume_ratio,
+        "technical_notes": list(signals.notes),
+    }
 
 
 class BriefingComposer:
@@ -429,6 +503,7 @@ class BriefingComposer:
                 universe_percentile=float(getattr(report, "universe_percentile", 0.0) or 0.0),
                 universe_size=int(getattr(report, "universe_size", 0) or 0),
                 valuation_percentile=float(getattr(report, "valuation_percentile", -1.0)),
+                **_technical_fields(getattr(report, "technicals", None)),
             ))
 
         # Rank actionable ideas first, then by score.
@@ -492,6 +567,27 @@ class BriefingComposer:
                     "recent_headlines": [
                         item.get("title", "") for item in idea.news_drivers
                     ],
+                    # Chart structure, so the model can say "good business, wrong
+                    # moment" instead of only reasoning about fundamentals.
+                    "technical": {
+                        "score": idea.technical_score,
+                        "trend_alignment": idea.trend_alignment,
+                        "ema_stack": {
+                            "ema5": idea.ema_fast,
+                            "ema60": idea.ema_mid,
+                            "ema129": idea.ema_slow,
+                        },
+                        "price_vs_ema129_pct": idea.price_vs_slow_pct,
+                        "macd_cross": idea.macd_cross,
+                        "macd_cross_age_days": idea.macd_cross_age,
+                        "macd_histogram": idea.macd_histogram,
+                        "rsi": idea.rsi,
+                        "rsi_zone": idea.rsi_zone,
+                        "adx": idea.adx,
+                        "atr_pct": idea.atr_pct,
+                        "ma_cross": idea.ma_cross,
+                        "volume_ratio": idea.volume_ratio,
+                    } if idea.technical_available else None,
                 }
                 for idea in briefing.ideas
             ],

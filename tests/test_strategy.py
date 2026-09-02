@@ -8,15 +8,19 @@ contradicted the recommendations it came from.
 from __future__ import annotations
 
 import unittest
+from typing import Optional
 from unittest.mock import MagicMock
 
 from src.core.gates import (
     MIN_RANKED_UNIVERSE,
     entry_block_reason,
     qualifies_on_rank,
+    technical_block_reason,
     valuation_block_reason,
 )
 from src.core.orchestrator import rank_reports
+from src.core.technicals import TechnicalSignals
+from src.core import technicals as ta
 from src.core.valuation import ValuationEngine
 from src.data.fetcher import CompanyFinancials
 from src.research.briefing import classify_action
@@ -61,6 +65,7 @@ def _report(
     cap: float = 10.0,
     is_etf: bool = False,
     price: float = 100.0,
+    technicals: Optional[TechnicalSignals] = None,
 ) -> MagicMock:
     report = MagicMock()
     fin = report.financials
@@ -85,6 +90,11 @@ def _report(
     report.universe_size = 0
     report.valuation_percentile = -1.0
     report.analysis_id = "id"
+    # A real dataclass, never a MagicMock: an auto-created attribute would make
+    # every numeric comparison in the technical gate raise TypeError.
+    report.technicals = technicals if technicals is not None else TechnicalSignals(
+        ticker=ticker, bars=252, technical_score=None,
+    )
     return report
 
 
@@ -206,6 +216,163 @@ class EntryGateTests(unittest.TestCase):
         etf = _report(is_etf=True, mos=-90.0, momentum=10.0)
         etf.valuation_percentile = 1.0
         self.assertEqual(entry_block_reason(etf), "")
+
+
+class TechnicalIndicatorTests(unittest.TestCase):
+    """Indicator maths, pinned against the reference implementation.
+
+    Expected values were produced by `bukosabino/ta` (pandas) on the same inputs
+    and verified to floating-point equality; see the module docstring in
+    `src/core/technicals.py`. These are the numbers, not just relative checks,
+    because an indicator that is subtly wrong still looks plausible on a chart.
+    """
+
+    # A deterministic ramp with pullbacks — enough bars to warm up EMA129.
+    @staticmethod
+    def _series(n: int = 300) -> list:
+        out = []
+        value = 100.0
+        for i in range(n):
+            value *= 1.004 if i % 5 != 4 else 0.994
+            out.append(round(value, 4))
+        return out
+
+    def test_ema_matches_pandas_recursion(self):
+        closes = [10, 11, 10.5, 12, 13, 12.5, 14, 15, 14.2, 16]
+        # pandas: Series(closes).ewm(span=5, min_periods=5, adjust=False).mean()
+        expected = [
+            None, None, None, None,
+            11.617284, 11.911523, 12.607682, 13.405121, 13.670081, 14.446721,
+        ]
+        actual = ta.ema_series(closes, 5)
+        self.assertEqual(len(actual), len(expected))
+        for got, want in zip(actual, expected):
+            if want is None:
+                self.assertIsNone(got)
+            else:
+                self.assertAlmostEqual(got, want, places=6)
+
+    def test_ema_warmup_returns_none_not_a_partial_value(self):
+        """A half-warmed EMA129 is a different number, not a worse EMA129."""
+
+        short = ta.ema_series(list(range(1, 50)), 129)
+        self.assertTrue(all(value is None for value in short))
+
+    def test_macd_signal_is_an_ema_of_the_macd_line(self):
+        closes = self._series(120)
+        line, signal, histogram = ta.macd_series(closes)
+        # The signal cannot exist before the line does.
+        first_line = next(i for i, v in enumerate(line) if v is not None)
+        first_signal = next(i for i, v in enumerate(signal) if v is not None)
+        self.assertEqual(first_signal, first_line + ta.MACD_SIGNAL - 1)
+        # Histogram is line minus signal, exactly.
+        self.assertAlmostEqual(histogram[-1], line[-1] - signal[-1], places=9)
+
+    def test_rsi_is_100_when_there_are_no_losses(self):
+        rising = [100.0 + i for i in range(40)]
+        self.assertAlmostEqual(ta.rsi_series(rising)[-1], 100.0, places=6)
+
+    def test_rsi_stays_within_bounds(self):
+        for closes in (self._series(200), [100.0 - i * 0.5 for i in range(80)]):
+            values = [v for v in ta.rsi_series(closes) if v is not None]
+            self.assertTrue(values)
+            self.assertTrue(all(0.0 <= v <= 100.0 for v in values))
+
+    def test_true_range_uses_the_widest_of_three_spans(self):
+        highs = [10.0, 12.0]
+        lows = [9.0, 11.5]
+        closes = [9.5, 11.8]
+        # max(12-11.5, |12-9.5|, |11.5-9.5|) = 2.5
+        self.assertAlmostEqual(ta.true_range_series(highs, lows, closes)[1], 2.5)
+
+    def test_short_history_reports_nothing_rather_than_a_guess(self):
+        signals = ta.analyse([100.0, 101.0, 102.0], ticker="NEW")
+        self.assertFalse(signals.available)
+        self.assertIsNone(signals.technical_score)
+        self.assertTrue(any("不足以计算" in note for note in signals.notes))
+
+    def test_bullish_stack_scores_above_bearish(self):
+        rising = self._series(300)
+        falling = list(reversed(rising))
+        up = ta.analyse(rising, ticker="UP")
+        down = ta.analyse(falling, ticker="DOWN")
+        self.assertEqual(up.trend_alignment, "bullish")
+        self.assertEqual(down.trend_alignment, "bearish")
+        self.assertGreater(up.technical_score, down.technical_score)
+
+    def test_flat_noise_is_not_read_as_a_bullish_trend(self):
+        """A series oscillating +-0.05% ordered the EMAs and scored 80/100.
+
+        Ordering alone is not a trend: the lines were separated by 0.01% of price.
+        Requiring real separation plus deadbands on the regime line and MACD sign
+        pulls this back toward neutral without touching genuine trends, which run
+        a 4-18% EMA5/EMA129 spread on live data.
+        """
+
+        flat = [100.0 + (1.0 if i % 2 else -1.0) * 0.05 for i in range(300)]
+        signals = ta.analyse(flat, ticker="CHOP")
+        self.assertEqual(signals.trend_alignment, "mixed")
+        self.assertLess(signals.technical_score, 62.0)
+
+    def test_ordered_but_unseparated_stack_is_mixed(self):
+        spread = ta.MIN_STACK_SPREAD_PCT
+        self.assertEqual(ta._alignment(100.5, 100.3, 100.0, 100.0), "mixed")
+        # Same ordering, now genuinely separated.
+        self.assertEqual(
+            ta._alignment(100.0 + spread * 2, 100.0 + spread, 100.0, 100.0),
+            "bullish",
+        )
+
+
+class TechnicalGateTests(unittest.TestCase):
+    def _signals(self, **overrides) -> TechnicalSignals:
+        signals = TechnicalSignals(ticker="X", bars=252, technical_score=50.0)
+        for key, value in overrides.items():
+            setattr(signals, key, value)
+        return signals
+
+    def test_fresh_death_cross_below_zero_blocks_entry(self):
+        report = _report(technicals=self._signals(
+            macd_cross="death", macd_cross_age=1, macd_above_zero=False,
+        ))
+        self.assertIn("死叉", technical_block_reason(report))
+
+    def test_stale_death_cross_does_not_block(self):
+        report = _report(technicals=self._signals(
+            macd_cross="death", macd_cross_age=8, macd_above_zero=False,
+        ))
+        self.assertEqual(technical_block_reason(report), "")
+
+    def test_death_cross_above_zero_does_not_block(self):
+        report = _report(technicals=self._signals(
+            macd_cross="death", macd_cross_age=1, macd_above_zero=True,
+        ))
+        self.assertEqual(technical_block_reason(report), "")
+
+    def test_bearish_stack_blocks_only_when_the_trend_is_confirmed(self):
+        trending = _report(technicals=self._signals(trend_alignment="bearish", adx=30.0))
+        self.assertIn("空头排列", technical_block_reason(trending))
+        chopping = _report(technicals=self._signals(trend_alignment="bearish", adx=12.0))
+        self.assertEqual(technical_block_reason(chopping), "")
+
+    def test_overbought_rsi_alone_never_blocks(self):
+        """Overbought in a strong uptrend is the normal state of a leader."""
+
+        report = _report(technicals=self._signals(
+            rsi=88.0, rsi_zone="overbought", trend_alignment="bullish", adx=40.0,
+        ))
+        self.assertEqual(technical_block_reason(report), "")
+
+    def test_missing_technicals_fail_open(self):
+        self.assertEqual(technical_block_reason(_report()), "")
+
+    def test_etf_still_gets_the_technical_gate(self):
+        """An index has no DCF, but its chart is as readable as any stock's."""
+
+        etf = _report(is_etf=True, technicals=self._signals(
+            trend_alignment="bearish", adx=32.0,
+        ))
+        self.assertIn("空头排列", entry_block_reason(etf))
 
 
 class BriefingDecisionTests(unittest.TestCase):

@@ -99,6 +99,14 @@ class CompanyFinancials:
     depreciation_history: List[float] = field(default_factory=list)
     net_income_history: List[float] = field(default_factory=list)
     revenue_history: List[float] = field(default_factory=list)
+    # Full-resolution daily OHLCV for the technical layer, oldest first (~250
+    # bars). Distinct from `price_history`, which is downsampled to ~60 points for
+    # the sparkline and therefore cannot support EMA129 or MACD. These are
+    # stripped before the briefing is serialised — see `service._report`.
+    daily_closes: List[float] = field(default_factory=list)
+    daily_highs: List[float] = field(default_factory=list)
+    daily_lows: List[float] = field(default_factory=list)
+    daily_volumes: List[float] = field(default_factory=list)
 
 
 # No per-ticker preset table. Seven symbols used to carry hand-written prices
@@ -323,6 +331,10 @@ class DataFetcher:
             revenue_history=[
                 float(value) for value in (data.get("revenue_history") or [])
             ],
+            daily_closes=[float(v) for v in (data.get("daily_closes") or [])],
+            daily_highs=[float(v) for v in (data.get("daily_highs") or [])],
+            daily_lows=[float(v) for v in (data.get("daily_lows") or [])],
+            daily_volumes=[float(v) for v in (data.get("daily_volumes") or [])],
             # An ETF has no issuer income statement: NASDAQ's fundamentals
             # endpoint returns nothing for revenue/equity/EPS. Verified live —
             # QQQM/SPYM/SMH/COWZ/URA all come back with zeros and are absent
@@ -358,11 +370,21 @@ class DataFetcher:
         timestamps = [int(value) for value in chart.get("timestamp", [])]
         quote_sets = list(chart.get("indicators", {}).get("quote", []))
         closes_raw = list(quote_sets[0].get("close", [])) if quote_sets else []
+        highs_raw = list(quote_sets[0].get("high", [])) if quote_sets else []
+        lows_raw = list(quote_sets[0].get("low", [])) if quote_sets else []
+        volumes_raw = list(quote_sets[0].get("volume", [])) if quote_sets else []
         history = [
             (stamp, float(close))
             for stamp, close in zip(timestamps, closes_raw)
             if close is not None and math.isfinite(float(close)) and float(close) > 0.0
         ]
+        # Full-resolution OHLCV for the technical layer. `history` alone is not
+        # enough: it is downsampled to ~60 points for the sparkline, while EMA129
+        # needs every one of the ~250 daily bars. Only bars where all four fields
+        # are present are kept, so the series stay index-aligned — an indicator
+        # that silently skips a bar in one series but not another is wrong in a
+        # way that does not look wrong.
+        bars = self._aligned_bars(closes_raw, highs_raw, lows_raw, volumes_raw)
         price = self._number(meta.get("regularMarketPrice"))
         if not price and history:
             price = history[-1][1]
@@ -386,7 +408,52 @@ class DataFetcher:
             "market_status": "OPEN" if market_open else "CLOSED",
             "quote_as_of_utc": as_of,
             "market_data_age_seconds": max(0, now_epoch - market_epoch) if market_epoch else None,
+            "daily_closes": bars["closes"],
+            "daily_highs": bars["highs"],
+            "daily_lows": bars["lows"],
+            "daily_volumes": bars["volumes"],
         }, ([item[0] for item in history], [item[1] for item in history]))
+
+    @staticmethod
+    def _aligned_bars(
+        closes: List[Any],
+        highs: List[Any],
+        lows: List[Any],
+        volumes: List[Any],
+    ) -> Dict[str, List[float]]:
+        """Keep only bars where close/high/low are all present and finite.
+
+        Yahoo returns nulls for halted sessions. Dropping a bar from one series
+        but not the others would silently shift the alignment between highs and
+        closes, which corrupts ATR and ADX without producing an obvious error.
+        Volume is allowed to be missing and is zero-filled, since it only feeds a
+        relative-volume note and never the score.
+        """
+
+        out: Dict[str, List[float]] = {"closes": [], "highs": [], "lows": [], "volumes": []}
+        for index, close in enumerate(closes):
+            high = highs[index] if index < len(highs) else None
+            low = lows[index] if index < len(lows) else None
+            if close is None or high is None or low is None:
+                continue
+            try:
+                close_f, high_f, low_f = float(close), float(high), float(low)
+            except (TypeError, ValueError):
+                continue
+            if not all(math.isfinite(v) for v in (close_f, high_f, low_f)):
+                continue
+            if close_f <= 0.0 or high_f <= 0.0 or low_f <= 0.0:
+                continue
+            volume = volumes[index] if index < len(volumes) else None
+            try:
+                volume_f = float(volume) if volume is not None else 0.0
+            except (TypeError, ValueError):
+                volume_f = 0.0
+            out["closes"].append(close_f)
+            out["highs"].append(high_f)
+            out["lows"].append(low_f)
+            out["volumes"].append(volume_f if math.isfinite(volume_f) else 0.0)
+        return out
 
     def _nasdaq_bundle(self, ticker: str) -> Dict[str, Any]:
         endpoints = {

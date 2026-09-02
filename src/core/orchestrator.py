@@ -14,6 +14,7 @@ from .masters import MastersDebateEngine, MasterDebateResult
 from .valuation import ValuationEngine, ValuationResult
 from .quant_factors import QuantFactorModel, QuantFactorBreakdown
 from .risk_manager import RiskManager, RiskAssessment
+from .technicals import TechnicalSignals, analyse as analyse_technicals
 from ..research.ai import AIResearchResult, AIResearchService
 from ..research.config import ResearchConfig
 from ..research.news import NewsResult, NewsService
@@ -23,13 +24,20 @@ from ..research.news import NewsResult, NewsService
 # so a good business at a bad price cannot coast through on pedigree alone.
 #
 # The split also separates slow-moving from fast-moving evidence. Quality moves
-# quarterly with filings; valuation and timing move daily. Measured live, the
-# absolute composite shifts under ~1.5 points between runs on a normal day —
-# which is why the briefing looked frozen and why RELATIVE rank, not the absolute
-# score, is what the briefing should lead with. See `rank_reports`.
-QUALITY_WEIGHT = 0.45
-VALUATION_WEIGHT = 0.30
-TIMING_WEIGHT = 0.25
+# quarterly with filings; valuation, timing and technicals move daily. Measured
+# live, the absolute composite shifts under ~1.5 points between runs on a normal
+# day — which is why the briefing looked frozen and why RELATIVE rank, not the
+# absolute score, is what the briefing should lead with. See `rank_reports`.
+#
+# TECHNICAL is its own layer rather than being folded into timing: momentum
+# answers "how has this moved", while the technical layer answers "what does the
+# chart structure say about entry" (EMA stack, MACD cross, RSI zone, ADX). They
+# disagree often enough to be worth separating — a name can be up strongly while
+# its MACD has already crossed down.
+QUALITY_WEIGHT = 0.35
+VALUATION_WEIGHT = 0.25
+TIMING_WEIGHT = 0.20
+TECHNICAL_WEIGHT = 0.20
 
 
 def _valuation_score(margin_of_safety_pct: float, reliable: bool = True) -> float:
@@ -83,6 +91,9 @@ class ComprehensiveAnalysisReport:
     generated_at_utc: str
     news: NewsResult
     ai_research: AIResearchResult
+    # Chart-structure reading over the daily OHLCV series. `available` is False
+    # when history was too short to form the indicators.
+    technicals: Optional[TechnicalSignals] = None
     # Percentile rank within the universe analysed in the same run (0-100,
     # highest score = 100). Populated by `rank_reports`; 0 when scored alone.
     universe_percentile: float = 0.0
@@ -193,12 +204,36 @@ class OmniAlphaOrchestrator:
         )
         timing_layer = _timing_score(quant.momentum_score, news_sentiment)
 
-        final_score = round(
-            quality_layer * QUALITY_WEIGHT
-            + val_scaled * VALUATION_WEIGHT
-            + timing_layer * TIMING_WEIGHT,
-            1,
+        # Technical layer from the daily OHLCV series. When there is not enough
+        # history (a recent listing, or an instrument Yahoo returns sparsely) the
+        # layer is dropped and its weight is redistributed across the others,
+        # rather than substituting a neutral 50 — a neutral score is a claim that
+        # the chart is unremarkable, which is not what "no data" means.
+        technical = analyse_technicals(
+            fin.daily_closes,
+            fin.daily_highs,
+            fin.daily_lows,
+            fin.daily_volumes,
+            ticker=fin.ticker,
         )
+        if technical.technical_score is not None:
+            final_score = round(
+                quality_layer * QUALITY_WEIGHT
+                + val_scaled * VALUATION_WEIGHT
+                + timing_layer * TIMING_WEIGHT
+                + technical.technical_score * TECHNICAL_WEIGHT,
+                1,
+            )
+        else:
+            active = QUALITY_WEIGHT + VALUATION_WEIGHT + TIMING_WEIGHT
+            final_score = round(
+                (
+                    quality_layer * QUALITY_WEIGHT
+                    + val_scaled * VALUATION_WEIGHT
+                    + timing_layer * TIMING_WEIGHT
+                ) / active,
+                1,
+            )
 
         if final_score >= 80.0:
             rec = "STRONG BUY (Top Tier Conviction)"
@@ -251,6 +286,7 @@ class OmniAlphaOrchestrator:
                     "valuation": asdict(val),
                     "quant": asdict(quant),
                     "risk": asdict(risk),
+                    "technicals": asdict(technical),
                 },
             },
             news.items,
@@ -269,6 +305,7 @@ class OmniAlphaOrchestrator:
             generated_at_utc=datetime.now(timezone.utc).isoformat(),
             news=news,
             ai_research=ai_research,
+            technicals=technical,
         )
 
     def compare_multiple(self, tickers: List[str]) -> List[ComprehensiveAnalysisReport]:

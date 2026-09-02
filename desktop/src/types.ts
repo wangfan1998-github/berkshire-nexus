@@ -473,6 +473,26 @@ export interface BriefingIdea {
   universe_percentile?: number;
   universe_size?: number;
   valuation_percentile?: number;
+  technical_score?: number | null;
+  technical_available?: boolean;
+  ema_fast?: number | null;
+  ema_mid?: number | null;
+  ema_slow?: number | null;
+  price_vs_slow_pct?: number | null;
+  macd?: number | null;
+  macd_signal?: number | null;
+  macd_histogram?: number | null;
+  macd_cross?: string;
+  macd_cross_age?: number | null;
+  rsi?: number | null;
+  rsi_zone?: string;
+  adx?: number | null;
+  atr_pct?: number | null;
+  trend_alignment?: string;
+  ma_cross?: string;
+  ma_cross_age?: number | null;
+  volume_ratio?: number | null;
+  technical_notes?: string[];
 }
 
 export interface BriefingSegment {

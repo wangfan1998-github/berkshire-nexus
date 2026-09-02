@@ -229,6 +229,25 @@ const ACTION_TONE: Record<string, "good" | "warn" | "risk" | "neutral"> = {
   AVOID: "risk",
 };
 
+/** EMA stack state. "mixed" covers both crossing lines and an unseparated stack. */
+const TREND_LABEL: Record<string, string> = {
+  bullish: "多头",
+  bearish: "空头",
+  mixed: "交织",
+};
+
+const TREND_TONE: Record<string, string> = {
+  bullish: "pnl-up",
+  bearish: "pnl-down",
+  mixed: "muted",
+};
+
+const RSI_LABEL: Record<string, string> = {
+  overbought: "超买",
+  oversold: "超卖",
+  neutral: "中性",
+};
+
 const TASK_LABEL: Record<string, string> = {
   briefing: "生成日报",
   "live-account": "读取账户",
@@ -834,6 +853,17 @@ function BriefingPage({
                       <strong>{idea.momentum_score.toFixed(1)}</strong>
                     </span>
                     <span className="idea-cell">
+                      <em className="idea-cap">技术</em>
+                      {idea.technical_available && idea.technical_score != null ? (
+                        <strong>
+                          {idea.technical_score.toFixed(0)}
+                          <i className={TREND_TONE[idea.trend_alignment ?? ""] ?? ""}>
+                            {TREND_LABEL[idea.trend_alignment ?? ""] ?? ""}
+                          </i>
+                        </strong>
+                      ) : <strong className="muted">—</strong>}
+                    </span>
+                    <span className="idea-cell">
                       <em className="idea-cap">现价</em>
                       <strong>
                         {money.format(idea.price)}
@@ -907,6 +937,51 @@ function BriefingPage({
                             )}
                           </ul>
                           <p className="muted">社交热度仅作拥挤度参考，不构成买入理由。</p>
+                        </>
+                      )}
+                      {idea.technical_available && (
+                        <>
+                          <p><strong>技术面（日线）</strong></p>
+                          <ul>
+                            {(idea.technical_notes ?? []).map((note, index) => (
+                              <li key={index}>{note}</li>
+                            ))}
+                          </ul>
+                          <table className="data-table compact">
+                            <thead>
+                              <tr>
+                                <th>EMA5</th><th>EMA60</th><th>EMA129</th>
+                                <th>MACD</th><th>信号</th><th>柱</th>
+                                <th>RSI</th><th>ADX</th><th>ATR</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr className="mono">
+                                <td>{idea.ema_fast?.toFixed(2) ?? "—"}</td>
+                                <td>{idea.ema_mid?.toFixed(2) ?? "—"}</td>
+                                <td>{idea.ema_slow?.toFixed(2) ?? "—"}</td>
+                                <td className={(idea.macd ?? 0) >= 0 ? "pnl-up" : "pnl-down"}>
+                                  {idea.macd?.toFixed(3) ?? "—"}
+                                </td>
+                                <td>{idea.macd_signal?.toFixed(3) ?? "—"}</td>
+                                <td className={(idea.macd_histogram ?? 0) >= 0 ? "pnl-up" : "pnl-down"}>
+                                  {idea.macd_histogram?.toFixed(3) ?? "—"}
+                                </td>
+                                <td>
+                                  {idea.rsi?.toFixed(1) ?? "—"}
+                                  {idea.rsi_zone && idea.rsi_zone !== "neutral" && (
+                                    <span className="muted"> {RSI_LABEL[idea.rsi_zone]}</span>
+                                  )}
+                                </td>
+                                <td>{idea.adx?.toFixed(1) ?? "—"}</td>
+                                <td>{idea.atr_pct != null ? `${idea.atr_pct.toFixed(1)}%` : "—"}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                          <p className="muted">
+                            技术面回答"现在是不是买点"，基本面回答"要不要拥有"。
+                            {(idea.adx ?? 99) < 20 && " ADX 偏低，均线与金叉信号可靠度下降。"}
+                          </p>
                         </>
                       )}
                       {(idea.news_drivers?.length ?? 0) > 0 && (

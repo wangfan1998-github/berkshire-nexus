@@ -127,6 +127,67 @@ def valuation_block_reason(report: ComprehensiveAnalysisReport) -> str:
     return ""
 
 
+def technical_block_reason(report: ComprehensiveAnalysisReport) -> str:
+    """Why the chart forbids an entry, or "" when it does not.
+
+    Only unambiguous structural breakdowns block. A technical reading is a timing
+    input, not a thesis, so this gate is deliberately narrow — three conditions
+    that all describe "the trend is against you right now" rather than any weak
+    indicator value:
+
+    * a **fresh MACD death cross** (within 3 sessions) while below the zero line
+    * a **bearish EMA stack** confirmed by a trending ADX
+    * price below the long-term regime line **and** falling away from it
+
+    RSI is excluded on purpose. Overbought in a strong uptrend is the normal state
+    of a leader, and gating on it would systematically exclude exactly the names
+    the trend layer is meant to find. It is scored, not gated.
+    """
+
+    signals = getattr(report, "technicals", None)
+    if signals is None or not isinstance(
+        getattr(signals, "technical_score", None), (int, float)
+    ):
+        # No usable reading. Guard on the score's *type* rather than a boolean
+        # flag: the flag can be truthy on a stub or a partially-built object, and
+        # comparing a non-numeric reading against a threshold raises rather than
+        # failing open — a gate that raises would abort the whole briefing.
+        return ""
+
+    if (
+        signals.macd_cross == "death"
+        and isinstance(signals.macd_cross_age, int)
+        and signals.macd_cross_age <= 3
+        and signals.macd_above_zero is False
+    ):
+        return (
+            f"MACD {signals.macd_cross_age} 天前死叉且在零轴下方，"
+            "趋势转弱，等结构修复再看"
+        )
+
+    adx = signals.adx if isinstance(signals.adx, (int, float)) else None
+    if signals.trend_alignment == "bearish" and adx is not None and adx >= 25.0:
+        return (
+            f"均线空头排列（EMA5 < EMA60 < EMA129）且 ADX {adx:.0f} "
+            "显示下跌趋势明确，不逆势买入"
+        )
+
+    distance = (
+        signals.price_vs_slow_pct
+        if isinstance(signals.price_vs_slow_pct, (int, float)) else None
+    )
+    if (
+        distance is not None
+        and distance < -5.0
+        and signals.trend_alignment == "bearish"
+    ):
+        return (
+            f"现价低于 EMA129 达 {distance:.1f}% 且均线空头排列，"
+            "长期趋势已破坏"
+        )
+    return ""
+
+
 def entry_block_reason(
     report: ComprehensiveAnalysisReport,
     buzz: Optional[object] = None,
@@ -134,15 +195,21 @@ def entry_block_reason(
     """Every hard gate that blocks *adding*, as one reason string.
 
     ETFs skip the fundamental gate: an index has no issuer income statement to
-    discount, so a DCF on it is meaningless. Price-action gates still apply.
+    discount, so a DCF on it is meaningless. Price-action and technical gates
+    still apply — chart structure is the one language that works for both a
+    company and an index.
     """
 
     if bool(getattr(report.financials, "is_etf", False)):
-        return chase_reason(report, buzz)
+        return chase_reason(report, buzz) or technical_block_reason(report)
 
     chase = chase_reason(report, buzz)
     if chase:
         return chase
+
+    technical = technical_block_reason(report)
+    if technical:
+        return technical
 
     valuation = valuation_block_reason(report)
     if valuation:
