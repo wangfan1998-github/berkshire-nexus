@@ -32,6 +32,10 @@ desktop/src-tauri/target/
 desktop/src-tauri/gen/
 .impeccable/review/
 
+# Runtime logs written next to the app; may contain tickers and request detail.
+log/
+*.log
+
 # BerkshireNexus local trading/learning state (may contain portfolio history)
 .berkshire-nexus/
 paper_portfolio.json
