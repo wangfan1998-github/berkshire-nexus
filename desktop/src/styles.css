@@ -565,3 +565,73 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .industry-chip.active { background: var(--paper-deep); border-color: var(--green-dark); font-weight: 650; }
 .industry-chip em { font-family: var(--mono); font-style: normal; font-size: 8px; }
 .sector-tile:disabled { opacity: .6; cursor: wait; }
+
+/* --- Analysis: stepped flow ---------------------------------------------- */
+/* Only one step renders at a time, so the crumb bar is what tells you where you
+   are and lets you go back without losing the selection. */
+.step-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 0 2px;
+  border-bottom: 1px solid var(--line);
+}
+.step-crumb {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  padding: 5px 10px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.step-crumb:hover:not(:disabled):not(.pending) { background: var(--paper-deep); color: var(--ink); }
+.step-crumb.active { color: var(--ink); background: var(--paper-deep); }
+.step-crumb:disabled, .step-crumb.pending { cursor: default; opacity: .5; }
+.step-index {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 8px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+.step-crumb em {
+  padding: 1px 5px;
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 8px;
+  font-style: normal;
+  background: var(--green-dark);
+  border-radius: 999px;
+}
+
+/* The run button must stay reachable while scrolling a 60-row table. */
+.action-bar {
+  position: sticky;
+  /* The scroll container carries 50px of bottom padding, so a `bottom: 0` bar
+     would come to rest 50px above the viewport edge and read as detached. */
+  bottom: -50px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 12px 0 14px;
+  background: linear-gradient(to bottom, transparent, var(--paper) 22%);
+  border-top: 1px solid var(--line);
+}
+.sort-row { margin-top: 10px; }
+.sort-row .muted { font-size: 9px; }
+
+/* Whole row toggles the checkbox — hitting a 13px box for every pick is fussy. */
+.data-table tbody tr { cursor: pointer; }
+.data-table tbody tr.row-picked { background: var(--green-soft); }
+.data-table tbody tr.row-picked:hover { background: var(--green-soft); }

@@ -524,6 +524,11 @@ export interface BriefingSegment {
 export interface DailyBriefing {
   generated_at_utc: string;
   trading_date: string;
+  /** Set by the analysis tab (sector name or 自选); absent on the daily briefing. */
+  label?: string;
+  /** Tickers the venue could price; empty when Binance is unreachable. */
+  venue_priced?: string[];
+  venue_error?: string;
   segments: BriefingSegment[];
   ideas: BriefingIdea[];
   portfolio: {

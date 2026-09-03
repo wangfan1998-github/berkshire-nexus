@@ -1160,105 +1160,118 @@ function AnalysisPage({
   const rows = matches.length > 0 ? matches : constituents;
   const busyAny = loading !== null;
 
+  // One step visible at a time. Everything used to stack on a single page, so
+  // after running an analysis the conclusions sat below a sector grid and a
+  // 60-row table and you scrolled past all of it to reach them.
+  const step: "browse" | "pick" | "result" =
+    result ? "result" : (rows.length > 0 || loading === "rows") ? "pick" : "browse";
+
+  const sectorLabel = activeSector
+    ? (sectors?.find((item) => item.id === activeSector)?.label ?? "")
+    : "";
+
   return (
     <div className="page">
-      <section className="ruled-section">
-        <SectionHeading
-          index="01"
-          title="搜索个股"
-          note="输入代码或公司名，跨全市场匹配；代码精确匹配优先。"
-        />
-        <form className="search-row" onSubmit={runSearch}>
-          <input
-            className="text-input"
-            placeholder="例如 NVDA、Micron、Tesla"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <button className="secondary-button" type="submit" disabled={busyAny || !query.trim()}>
-            {loading === "search" ? <LoaderCircle className="spin" size={14} /> : <Search size={14} />}
-            搜索
-          </button>
-          {matches.length > 0 && (
-            <button
-              className="text-button"
-              type="button"
-              onClick={() => { setMatches([]); setQuery(""); setVisible(PAGE_SIZE); }}
-            >
-              清除结果
-            </button>
-          )}
-        </form>
-      </section>
+      <nav className="step-bar" aria-label="分析步骤">
+        <button
+          className={`step-crumb ${step === "browse" ? "active" : ""}`}
+          disabled={busyAny}
+          onClick={() => { setResult(null); setConstituents([]); setMatches([]); setActiveSector(null); }}
+        >
+          <span className="step-index">1</span>
+          选择范围
+        </button>
+        <ChevronRight size={13} className="muted" />
+        <button
+          className={`step-crumb ${step === "pick" ? "active" : ""}`}
+          disabled={busyAny || rows.length === 0}
+          onClick={() => setResult(null)}
+        >
+          <span className="step-index">2</span>
+          勾选标的
+          {picked.length > 0 && <em>{picked.length}</em>}
+        </button>
+        <ChevronRight size={13} className="muted" />
+        <span className={`step-crumb ${step === "result" ? "active" : ""} ${result ? "" : "pending"}`}>
+          <span className="step-index">3</span>
+          分析结论
+        </span>
+      </nav>
 
-      <section className="ruled-section">
-        <SectionHeading
-          index="02"
-          title="按板块浏览"
-          note={
-            tradableFiltered
-              ? "仅显示 Binance 可交易的标的。"
-              : "Binance 不可达，显示全市场（其中部分可能无法交易）。"
-          }
-        />
-        {sectors === null ? (
-          <p className="muted-note">
-            {loading === "sectors" ? "正在读取全市场板块…" : "板块数据不可用。"}
-          </p>
-        ) : (
-          <div className="sector-grid">
-            {sectors.filter((item) => item.count > 0).map((sector) => (
-              <button
-                key={sector.id}
-                className={`sector-tile ${activeSector === sector.id ? "active" : ""}`}
-                disabled={busyAny}
-                onClick={() => void loadSector(sector.id)}
-              >
-                <span className="sector-name">{sector.label}</span>
-                <strong className={sector.average_change_pct >= 0 ? "pnl-up" : "pnl-down"}>
-                  {signed(sector.average_change_pct)}%
-                </strong>
-                <span className="muted">
-                  {sector.count} 只 · 上涨 {sector.breadth_pct.toFixed(0)}%
-                </span>
+      {step === "browse" && (
+        <>
+          <section className="ruled-section">
+            <SectionHeading
+              index="01"
+              title="搜索个股"
+              note="输入代码或公司名，跨全市场匹配；代码精确匹配优先。"
+            />
+            <form className="search-row" onSubmit={runSearch}>
+              <input
+                className="text-input"
+                placeholder="例如 NVDA、Micron、Tesla"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+              <button className="secondary-button" type="submit" disabled={busyAny || !query.trim()}>
+                {loading === "search" ? <LoaderCircle className="spin" size={14} /> : <Search size={14} />}
+                搜索
               </button>
-            ))}
-          </div>
-        )}
-      </section>
+            </form>
+          </section>
 
-      {(loading === "rows" || rows.length > 0) && (
+          <section className="ruled-section">
+            <SectionHeading
+              index="02"
+              title="或按板块浏览"
+              note={
+                tradableFiltered
+                  ? "仅显示 Binance 可交易的标的。"
+                  : "Binance 不可达，显示全市场（其中部分可能无法交易）。"
+              }
+            />
+            {sectors === null ? (
+              loading === "sectors" ? <LoadingPage /> : <p className="muted-note">板块数据不可用。</p>
+            ) : (
+              <div className="sector-grid">
+                {sectors.filter((item) => item.count > 0).map((sector) => (
+                  <button
+                    key={sector.id}
+                    className="sector-tile"
+                    disabled={busyAny}
+                    onClick={() => void loadSector(sector.id)}
+                  >
+                    <span className="sector-name">{sector.label}</span>
+                    <strong className={sector.average_change_pct >= 0 ? "pnl-up" : "pnl-down"}>
+                      {signed(sector.average_change_pct)}%
+                    </strong>
+                    <span className="muted">
+                      {sector.count} 只 · 上涨 {sector.breadth_pct.toFixed(0)}%
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        </>
+      )}
+
+      {step === "pick" && (
         <section className="ruled-section">
           <SectionHeading
-            index="03"
-            title={matches.length > 0 ? "搜索结果" : "板块内标的"}
+            index="02"
+            title={matches.length > 0 ? `搜索「${query}」` : `${sectorLabel}${industry ? " · " + (industries.find((i) => i.id === industry)?.label ?? "") : ""}`}
             note={
               loading === "rows"
                 ? "正在读取…"
-                : `勾选后运行分析，一次最多 25 只。共 ${rows.length} 只${
-                    rows.length > visible ? `，已显示 ${visible} 只` : ""
-                  }`
+                : `共 ${rows.length} 只，已显示 ${Math.min(visible, rows.length)} 只。勾选后运行分析，一次最多 25 只。`
             }
             action={
-              matches.length === 0 && activeSector ? (
-                <div className="button-row">
-                  {[
-                    ["dollar_volume", "成交额"],
-                    ["gainers", "涨幅"],
-                    ["losers", "跌幅"],
-                    ["market_cap", "市值"],
-                  ].map(([value, text]) => (
-                    <button
-                      key={value}
-                      className={`text-button ${order === value ? "active" : ""}`}
-                      disabled={busyAny}
-                      onClick={() => { setOrder(value); void loadSector(activeSector, value, industry); }}
-                    >
-                      {text}
-                    </button>
-                  ))}
-                </div>
-              ) : undefined
+              <button className="text-button" disabled={busyAny} onClick={() => {
+                setResult(null); setConstituents([]); setMatches([]); setActiveSector(null); setQuery("");
+              }}>
+                ← 重新选择
+              </button>
             }
           />
 
@@ -1288,6 +1301,27 @@ function AnalysisPage({
             </div>
           )}
 
+          {matches.length === 0 && activeSector && (
+            <div className="button-row sort-row">
+              <span className="muted">排序</span>
+              {[
+                ["dollar_volume", "成交额"],
+                ["gainers", "涨幅"],
+                ["losers", "跌幅"],
+                ["market_cap", "市值"],
+              ].map(([value, text]) => (
+                <button
+                  key={value}
+                  className={`text-button ${order === value ? "active" : ""}`}
+                  disabled={busyAny}
+                  onClick={() => { setOrder(value); void loadSector(activeSector, value, industry); }}
+                >
+                  {text}
+                </button>
+              ))}
+            </div>
+          )}
+
           {loading === "rows" ? (
             <LoadingPage />
           ) : (
@@ -1301,12 +1335,17 @@ function AnalysisPage({
                 </thead>
                 <tbody>
                   {rows.slice(0, visible).map((row) => (
-                    <tr key={row.ticker}>
+                    <tr
+                      key={row.ticker}
+                      className={picked.includes(row.ticker) ? "row-picked" : ""}
+                      onClick={() => toggle(row.ticker)}
+                    >
                       <td>
                         <input
                           type="checkbox"
                           checked={picked.includes(row.ticker)}
                           onChange={() => toggle(row.ticker)}
+                          onClick={(event) => event.stopPropagation()}
                         />
                       </td>
                       <td className="mono">{row.ticker}</td>
@@ -1335,7 +1374,9 @@ function AnalysisPage({
             </>
           )}
 
-          <div className="button-row">
+          {/* Pinned so the action stays reachable without scrolling back down a
+              60-row table. */}
+          <div className="action-bar">
             <button className="primary-button" disabled={busyAny || picked.length === 0} onClick={() => void analyse()}>
               {loading === "run"
                 ? <><LoaderCircle className="spin" size={15} /> 分析中… {elapsed}s（约 {Math.max(picked.length * 6, 10)}s）</>
@@ -1349,12 +1390,20 @@ function AnalysisPage({
         </section>
       )}
 
-      {result && (
+      {step === "result" && result && (
         <section className="ruled-section">
           <SectionHeading
-            index="04"
+            index="03"
             title="分析结论"
-            note="与日报同一套引擎：确定性规则给判定，AI 负责解释与反驳。"
+            note={`${result.ideas.length} 只标的${result.label ? ` · ${result.label}` : ""}。判定由确定性规则给出；AI 负责解释与反驳。`}
+            action={
+              <div className="button-row">
+                <button className="text-button" onClick={() => setResult(null)}>← 返回列表</button>
+                <button className="text-button" disabled={busyAny} onClick={() => void analyse()}>
+                  重新分析
+                </button>
+              </div>
+            }
           />
           {result.ai_status === "ok" && result.market_note ? (
             <p className="market-note">{result.market_note}</p>
