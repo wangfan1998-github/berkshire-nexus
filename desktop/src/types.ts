@@ -600,9 +600,23 @@ export interface SectorOverview {
   tradable_filtered: boolean;
 }
 
+/** A sub-industry inside a sector: "Technology" spans software and semis. */
+export interface IndustrySummary {
+  id: string;
+  label: string;
+  sector: string;
+  count: number;
+  average_change_pct: number;
+  breadth_pct: number;
+  total_dollar_volume: number;
+  leader: string;
+}
+
 export interface SectorConstituents {
   sector: string;
   order: string;
+  industry: string;
+  industries: IndustrySummary[];
   rows: ScreenedStock[];
 }
 

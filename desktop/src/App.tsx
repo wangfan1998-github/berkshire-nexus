@@ -45,6 +45,7 @@ import type {
   CredentialCheck,
   DailyBriefing,
   DesktopSettings,
+  IndustrySummary,
   LiveAccount,
   LiveCycleResult,
   PageId,
@@ -269,9 +270,15 @@ function ExternalLink({ href, children }: { href: string; children: ReactNode })
       href={href}
       onClick={(event) => {
         event.preventDefault();
-        // A dead link is better than a crash: the report still renders if the
-        // OS refuses the handoff.
-        void openUrl(href).catch(() => undefined);
+        // Surface failures. Swallowing them hid a real misconfiguration: the
+        // capability granted `opener:allow-open-url`, which enables the command
+        // but carries NO url scope, so every https:// call was rejected by the
+        // scope check and the link looked simply dead. `opener:default` is the
+        // set that also allows http/https/mailto/tel.
+        void openUrl(href).catch((error) => {
+          console.error("openUrl failed", href, error);
+          window.alert(`无法打开链接：${asError(error)}\n\n${href}`);
+        });
       }}
     >
       {children}
@@ -1016,6 +1023,9 @@ function IdeaCard({
   );
 }
 
+/** Rows shown before "load more". Enough to scan, short enough to see the end. */
+const PAGE_SIZE = 15;
+
 /** On-demand analysis: browse any sector, search any ticker.
  *
  * The briefing answers one fixed question about the AI supply chain. This points
@@ -1024,19 +1034,20 @@ function IdeaCard({
  */
 function AnalysisPage({
   settings,
-  busy,
-  elapsed,
   onNotify,
 }: {
   settings: DesktopSettings;
-  busy: BusyAction;
-  elapsed: number;
   onNotify: (tone: Toast["tone"], message: string) => void;
 }) {
   const [sectors, setSectors] = useState<SectorSummary[] | null>(null);
   const [tradableFiltered, setTradableFiltered] = useState(true);
   const [activeSector, setActiveSector] = useState<string | null>(null);
   const [constituents, setConstituents] = useState<ScreenedStock[]>([]);
+  const [industries, setIndustries] = useState<IndustrySummary[]>([]);
+  const [industry, setIndustry] = useState("");
+  // The table used to render every row at once. A sector returns dozens, which
+  // made the page one long scroll with no sense of how much was left.
+  const [visible, setVisible] = useState(PAGE_SIZE);
   const [order, setOrder] = useState("dollar_volume");
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<ScreenedStock[]>([]);
@@ -1044,6 +1055,20 @@ function AnalysisPage({
   const [result, setResult] = useState<DailyBriefing | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState<"sectors" | "rows" | "search" | "run" | null>(null);
+  // This page drives its own timer. It used to read the app-level `elapsed`,
+  // which only advances while the *global* `busy` is set — and this page never
+  // sets it, so the counter sat at 0s for the whole run and looked frozen.
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (loading !== "run") {
+      setElapsed(0);
+      return;
+    }
+    setElapsed(0);
+    const timer = window.setInterval(() => setElapsed((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [loading]);
 
   // Sectors load once when the tab first opens; the backend caches the
   // underlying 7,100-row screener for 5 minutes anyway.
@@ -1061,15 +1086,23 @@ function AnalysisPage({
   }, [sectors, onNotify]);
 
   const loadSector = useCallback(
-    async (sectorId: string, nextOrder = order) => {
+    async (sectorId: string, nextOrder = order, nextIndustry = "") => {
       setActiveSector(sectorId);
+      setIndustry(nextIndustry);
+      // Clear immediately so the old sector's rows cannot sit under the new
+      // sector's heading while the request is in flight.
+      setConstituents([]);
+      setMatches([]);
+      setVisible(PAGE_SIZE);
       setLoading("rows");
       try {
         const value = await desktopBridge.sectorConstituents(sectorId, {
-          limit: 12,
+          limit: 60,
           order: nextOrder,
+          industry: nextIndustry,
         });
         setConstituents(value.rows);
+        setIndustries(value.industries);
       } catch (error) {
         onNotify("error", asError(error));
       } finally {
@@ -1087,6 +1120,7 @@ function AnalysisPage({
       try {
         const value = await desktopBridge.searchTickers(query.trim(), 20);
         setMatches(value.rows);
+        setVisible(PAGE_SIZE);
         if (value.rows.length === 0) onNotify("info", `没有找到与「${query}」匹配的标的`);
       } catch (error) {
         onNotify("error", asError(error));
@@ -1124,7 +1158,7 @@ function AnalysisPage({
   };
 
   const rows = matches.length > 0 ? matches : constituents;
-  const busyAny = loading !== null || busy !== null;
+  const busyAny = loading !== null;
 
   return (
     <div className="page">
@@ -1149,7 +1183,7 @@ function AnalysisPage({
             <button
               className="text-button"
               type="button"
-              onClick={() => { setMatches([]); setQuery(""); }}
+              onClick={() => { setMatches([]); setQuery(""); setVisible(PAGE_SIZE); }}
             >
               清除结果
             </button>
@@ -1177,6 +1211,7 @@ function AnalysisPage({
               <button
                 key={sector.id}
                 className={`sector-tile ${activeSector === sector.id ? "active" : ""}`}
+                disabled={busyAny}
                 onClick={() => void loadSector(sector.id)}
               >
                 <span className="sector-name">{sector.label}</span>
@@ -1192,12 +1227,18 @@ function AnalysisPage({
         )}
       </section>
 
-      {rows.length > 0 && (
+      {(loading === "rows" || rows.length > 0) && (
         <section className="ruled-section">
           <SectionHeading
             index="03"
             title={matches.length > 0 ? "搜索结果" : "板块内标的"}
-            note="勾选后运行分析，一次最多 25 只。"
+            note={
+              loading === "rows"
+                ? "正在读取…"
+                : `勾选后运行分析，一次最多 25 只。共 ${rows.length} 只${
+                    rows.length > visible ? `，已显示 ${visible} 只` : ""
+                  }`
+            }
             action={
               matches.length === 0 && activeSector ? (
                 <div className="button-row">
@@ -1210,7 +1251,8 @@ function AnalysisPage({
                     <button
                       key={value}
                       className={`text-button ${order === value ? "active" : ""}`}
-                      onClick={() => { setOrder(value); void loadSector(activeSector, value); }}
+                      disabled={busyAny}
+                      onClick={() => { setOrder(value); void loadSector(activeSector, value, industry); }}
                     >
                       {text}
                     </button>
@@ -1219,42 +1261,87 @@ function AnalysisPage({
               ) : undefined
             }
           />
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>选择</th><th>代码</th><th>名称</th>
-                <th>现价</th><th>涨跌</th><th>成交额</th><th>板块</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.ticker}>
-                  <td>
-                    <input
-                      type="checkbox"
-                      checked={picked.includes(row.ticker)}
-                      onChange={() => toggle(row.ticker)}
-                    />
-                  </td>
-                  <td className="mono">{row.ticker}</td>
-                  <td>{row.name}</td>
-                  <td className="mono">{money.format(row.last_sale)}</td>
-                  <td className={row.change_pct >= 0 ? "pnl-up" : "pnl-down"}>
-                    {signed(row.change_pct)}%
-                  </td>
-                  <td className="mono">{compactMoney.format(row.dollar_volume)}</td>
-                  <td className="muted">{row.segment_label || row.sector}</td>
-                </tr>
+
+          {matches.length === 0 && industries.length > 1 && (
+            <div className="industry-row">
+              <button
+                className={`industry-chip ${industry === "" ? "active" : ""}`}
+                disabled={busyAny}
+                onClick={() => void loadSector(activeSector!, order, "")}
+              >
+                全部
+              </button>
+              {industries.map((item) => (
+                <button
+                  key={item.id}
+                  className={`industry-chip ${industry === item.id ? "active" : ""}`}
+                  disabled={busyAny}
+                  title={`${item.count} 只 · 龙头 ${item.leader} · 上涨 ${item.breadth_pct.toFixed(0)}%`}
+                  onClick={() => void loadSector(activeSector!, order, item.id)}
+                >
+                  {item.label}
+                  <em className={item.average_change_pct >= 0 ? "pnl-up" : "pnl-down"}>
+                    {signed(item.average_change_pct)}%
+                  </em>
+                </button>
               ))}
-            </tbody>
-          </table>
+            </div>
+          )}
+
+          {loading === "rows" ? (
+            <LoadingPage />
+          ) : (
+            <>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>选择</th><th>代码</th><th>名称</th>
+                    <th>现价</th><th>涨跌</th><th>成交额</th><th>行业</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, visible).map((row) => (
+                    <tr key={row.ticker}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={picked.includes(row.ticker)}
+                          onChange={() => toggle(row.ticker)}
+                        />
+                      </td>
+                      <td className="mono">{row.ticker}</td>
+                      <td>{row.name}</td>
+                      <td className="mono">{money.format(row.last_sale)}</td>
+                      <td className={row.change_pct >= 0 ? "pnl-up" : "pnl-down"}>
+                        {signed(row.change_pct)}%
+                      </td>
+                      <td className="mono">{compactMoney.format(row.dollar_volume)}</td>
+                      <td className="muted">{row.industry || row.sector}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {rows.length > visible && (
+                <div className="button-row">
+                  <button
+                    className="secondary-button"
+                    onClick={() => setVisible((value) => value + PAGE_SIZE)}
+                  >
+                    再显示 {Math.min(PAGE_SIZE, rows.length - visible)} 只
+                    （剩余 {rows.length - visible}）
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
           <div className="button-row">
             <button className="primary-button" disabled={busyAny || picked.length === 0} onClick={() => void analyse()}>
               {loading === "run"
-                ? <><LoaderCircle className="spin" size={15} /> 分析中… {elapsed}s</>
+                ? <><LoaderCircle className="spin" size={15} /> 分析中… {elapsed}s（约 {Math.max(picked.length * 6, 10)}s）</>
                 : <><BrainCircuit size={15} /> 分析选中的 {picked.length} 只</>}
             </button>
-            {picked.length > 0 && (
+            {picked.length > 0 && !busyAny && (
               <button className="text-button" onClick={() => setPicked([])}>清空选择</button>
             )}
             {picked.length >= 25 && <span className="muted">已达一次 25 只上限</span>}
@@ -2227,7 +2314,7 @@ export default function App() {
       case "briefing":
         return <BriefingPage briefing={briefing} aiConfigured={aiKeyConfigured && settings.research.ai_enabled} busy={busy} elapsed={elapsed} onGenerate={generateBriefing} onExecute={sendToStrategy} goTo={setPage} />;
       case "analysis":
-        return <AnalysisPage settings={settings} busy={busy} elapsed={elapsed} onNotify={notify} />;
+        return <AnalysisPage settings={settings} onNotify={notify} />;
       case "strategy":
         return (
           <StrategyPage

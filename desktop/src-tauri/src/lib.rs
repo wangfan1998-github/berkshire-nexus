@@ -469,6 +469,7 @@ async fn sector_constituents(
     sector: String,
     limit: u32,
     order: String,
+    industry: String,
 ) -> Result<Value, String> {
     let (key, secret) = optional_binance_credentials();
     run_json_command_full(
@@ -480,6 +481,8 @@ async fn sector_constituents(
             limit.clamp(1, 50).to_string(),
             "--order".to_string(),
             order,
+            "--industry".to_string(),
+            industry,
         ],
         Some(&key),
         Some(&secret),

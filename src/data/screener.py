@@ -440,6 +440,67 @@ class SectorBrowser:
                 return key
         return None
 
+    def industries_in_sector(
+        self,
+        sector_id: str,
+        *,
+        tradable: Optional[Set[str]] = None,
+        minimum_count: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """Sub-industries inside one sector, with the same breadth read.
+
+        NASDAQ tags every listing with a finer `industry` (152 distinct values)
+        under the 12 coarse sectors. "Technology" alone spans prepackaged
+        software, EDP services, semiconductors and semi equipment — businesses
+        with almost nothing in common, so a sector-level average blurs exactly
+        the distinction a user is looking for.
+
+        Industries with fewer than ``minimum_count`` tradable names are folded
+        away: a one-stock "industry" is a label, not a group, and its "breadth"
+        would read 0% or 100%.
+        """
+
+        if sector_id not in MARKET_SECTORS:
+            raise ValueError(f"unknown sector: {sector_id}")
+        label = str(MARKET_SECTORS[sector_id]["label"])
+        buckets: Dict[str, List[ScreenedStock]] = {}
+        for row in self._listings():
+            ticker = str(row.get("symbol") or "").upper().strip()
+            if not ticker or (tradable is not None and ticker not in tradable):
+                continue
+            if self._sector_key(row) != sector_id:
+                continue
+            industry = str(row.get("industry") or "").strip()
+            if not industry:
+                continue
+            buckets.setdefault(industry, []).append(
+                self._row_to_stock(row, sector_id, label)
+            )
+
+        out: List[Dict[str, Any]] = []
+        for industry, rows in buckets.items():
+            if len(rows) < minimum_count:
+                continue
+            weight = sum(item.dollar_volume for item in rows)
+            weighted_change = (
+                sum(item.change_pct * item.dollar_volume for item in rows) / weight
+                if weight > 0 else 0.0
+            )
+            advancing = sum(1 for item in rows if item.change_pct > 0)
+            leader = max(rows, key=lambda item: item.dollar_volume)
+            out.append({
+                "id": industry,
+                "label": industry,
+                "sector": sector_id,
+                "count": len(rows),
+                "average_change_pct": round(weighted_change, 2),
+                "breadth_pct": round(advancing / len(rows) * 100.0, 1),
+                "total_dollar_volume": round(weight, 2),
+                "leader": leader.ticker,
+            })
+        out.sort(key=lambda item: -item["total_dollar_volume"])
+        return out
+
     def top_in_sector(
         self,
         sector_id: str,
@@ -448,8 +509,9 @@ class SectorBrowser:
         tradable: Optional[Set[str]] = None,
         minimum_dollar_volume: float = 1e7,
         order: str = "dollar_volume",
+        industry: str = "",
     ) -> List[Dict[str, Any]]:
-        """The most notable names in one sector.
+        """The most notable names in one sector, optionally one industry within it.
 
         ``order`` selects what "hot" means, because the honest answer depends on
         the question: ``dollar_volume`` is where the money is, ``gainers`` and
@@ -459,12 +521,15 @@ class SectorBrowser:
         if sector_id not in MARKET_SECTORS:
             raise ValueError(f"unknown sector: {sector_id}")
         label = str(MARKET_SECTORS[sector_id]["label"])
+        wanted_industry = industry.strip().lower()
         rows: List[ScreenedStock] = []
         for row in self._listings():
             ticker = str(row.get("symbol") or "").upper().strip()
             if not ticker or (tradable is not None and ticker not in tradable):
                 continue
             if self._sector_key(row) != sector_id:
+                continue
+            if wanted_industry and str(row.get("industry") or "").strip().lower() != wanted_industry:
                 continue
             stock = self._row_to_stock(row, sector_id, label)
             if stock.dollar_volume < minimum_dollar_volume:

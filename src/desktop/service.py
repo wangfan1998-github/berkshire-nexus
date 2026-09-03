@@ -712,15 +712,28 @@ class DesktopService:
         *,
         limit: int = 12,
         order: str = "dollar_volume",
+        industry: str = "",
     ) -> Dict[str, Any]:
-        """The notable names in one sector, before any deep analysis."""
+        """The notable names in one sector, plus its sub-industry breakdown.
+
+        Both come from one cached fetch, so the UI can render the drill-down and
+        the constituent list from a single round trip.
+        """
 
         tradable = self._tradable_or_none(api_key, api_secret)
         return json_safe({
             "sector": sector_id,
             "order": order,
+            "industry": industry,
+            "industries": self._sector_browser.industries_in_sector(
+                sector_id, tradable=tradable,
+            ),
             "rows": self._sector_browser.top_in_sector(
-                sector_id, limit=limit, tradable=tradable, order=order,
+                sector_id,
+                limit=limit,
+                tradable=tradable,
+                order=order,
+                industry=industry,
             ),
         })
 

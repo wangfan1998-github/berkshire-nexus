@@ -66,6 +66,7 @@ def main() -> None:
     constituents.add_argument("sector")
     constituents.add_argument("--limit", type=int, default=12)
     constituents.add_argument("--order", default="dollar_volume")
+    constituents.add_argument("--industry", default="")
 
     search = subparsers.add_parser("search-tickers")
     search.add_argument("query")
@@ -156,6 +157,7 @@ def main() -> None:
                 binance_secret,
                 limit=args.limit,
                 order=args.order,
+                industry=args.industry,
             )
         elif args.command == "search-tickers":
             value = service.search_tickers(

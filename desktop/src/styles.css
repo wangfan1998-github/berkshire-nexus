@@ -544,3 +544,24 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 
 /* The active sort in the constituents header. */
 .text-button.active { color: var(--ink); font-weight: 700; text-decoration: underline; }
+
+/* Sub-industry chips. "Technology" spans software (-2.2%) and computer
+   manufacturing (+9.0%) on the same day, so the breakdown is the point. */
+.industry-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.industry-chip {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 9px;
+  color: var(--ink);
+  font-size: 9px;
+  background: transparent;
+  border: 1px solid var(--line-dark);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 140ms ease, border 140ms ease;
+}
+.industry-chip:hover:not(:disabled) { background: var(--paper-deep); }
+.industry-chip.active { background: var(--paper-deep); border-color: var(--green-dark); font-weight: 650; }
+.industry-chip em { font-family: var(--mono); font-style: normal; font-size: 8px; }
+.sector-tile:disabled { opacity: .6; cursor: wait; }

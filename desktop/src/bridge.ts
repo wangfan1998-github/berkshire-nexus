@@ -199,13 +199,14 @@ export const desktopBridge = {
 
   async sectorConstituents(
     sector: string,
-    options?: { limit?: number; order?: string },
+    options?: { limit?: number; order?: string; industry?: string },
   ): Promise<SectorConstituents> {
     if (isTauri) {
       return invoke<SectorConstituents>("sector_constituents", {
         sector,
         limit: options?.limit ?? 12,
         order: options?.order ?? "dollar_volume",
+        industry: options?.industry ?? "",
       });
     }
     await wait(300);
