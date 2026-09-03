@@ -433,6 +433,119 @@ fn binance_credentials() -> Result<(String, String), String> {
     Ok((key, secret))
 }
 
+/// Credentials when they exist, empty strings when they do not.
+///
+/// The analysis surface is read-only research over public market data, so it
+/// must work before any key is configured — and while Binance is geo-blocked,
+/// which is a live condition rather than a hypothetical. `binance_credentials`
+/// hard-fails instead, which is correct for anything that touches the account.
+fn optional_binance_credentials() -> (String, String) {
+    let key = optional_key(BINANCE_KEYRING_ACCOUNT).ok().flatten().unwrap_or_default();
+    let secret = optional_key(BINANCE_SECRET_KEYRING_ACCOUNT)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    (key, secret)
+}
+
+/// Whole-market sector roll-up with today's breadth.
+#[tauri::command]
+async fn sector_overview(app: AppHandle) -> Result<Value, String> {
+    let (key, secret) = optional_binance_credentials();
+    run_json_command_full(
+        &app,
+        &["sector-overview".to_string()],
+        Some(&key),
+        Some(&secret),
+        None,
+        false,
+    )
+}
+
+/// The notable names inside one sector.
+#[tauri::command]
+async fn sector_constituents(
+    app: AppHandle,
+    sector: String,
+    limit: u32,
+    order: String,
+) -> Result<Value, String> {
+    let (key, secret) = optional_binance_credentials();
+    run_json_command_full(
+        &app,
+        &[
+            "sector-constituents".to_string(),
+            sector,
+            "--limit".to_string(),
+            limit.clamp(1, 50).to_string(),
+            "--order".to_string(),
+            order,
+        ],
+        Some(&key),
+        Some(&secret),
+        None,
+        false,
+    )
+}
+
+/// Ticker / company-name search across every listing.
+#[tauri::command]
+async fn search_tickers(app: AppHandle, query: String, limit: u32) -> Result<Value, String> {
+    let (key, secret) = optional_binance_credentials();
+    run_json_command_full(
+        &app,
+        &[
+            "search-tickers".to_string(),
+            query,
+            "--limit".to_string(),
+            limit.clamp(1, 50).to_string(),
+        ],
+        Some(&key),
+        Some(&secret),
+        None,
+        false,
+    )
+}
+
+/// Full analysis over an arbitrary ticker list, shaped like a briefing.
+///
+/// Distinct from `analyze_tickers`, which calls the older `analyze` command and
+/// returns bare reports: this one runs the same pipeline the briefing uses
+/// (venue prices, news sentiment, ranking, gates) so the analysis tab renders
+/// identical conclusion cards.
+#[tauri::command]
+async fn analyze_selection(
+    app: AppHandle,
+    tickers: Vec<String>,
+    research_config: Value,
+    minimum_score: f64,
+    label: String,
+) -> Result<Value, String> {
+    if tickers.is_empty() {
+        return Err("请先选择至少一只标的".to_string());
+    }
+    let (key, secret) = optional_binance_credentials();
+    let mut arguments = vec!["analyze-tickers".to_string()];
+    arguments.extend(tickers);
+    arguments.extend([
+        "--minimum-score".to_string(),
+        minimum_score.to_string(),
+        "--label".to_string(),
+        label,
+        "--research-config-json".to_string(),
+        serde_json::to_string(&research_config).map_err(|error| error.to_string())?,
+    ]);
+    let ai_key = ai_key_for_config(&research_config, false)?;
+    run_json_command_full(
+        &app,
+        &arguments,
+        Some(&key),
+        Some(&secret),
+        ai_key.as_deref(),
+        false,
+    )
+}
+
 /// AI supply-chain daily briefing. Read-only: it never places an order.
 #[tauri::command]
 async fn daily_briefing(
@@ -761,6 +874,10 @@ fn agent_runtime_status(app: AppHandle, state: State<'_, AgentProcess>) -> Resul
 
 pub fn run() {
     let app = tauri::Builder::default()
+        // Without this plugin an <a target="_blank"> in the webview silently does
+        // nothing: the news links in the briefing looked clickable but never
+        // opened. The frontend calls openUrl() from @tauri-apps/plugin-opener.
+        .plugin(tauri_plugin_opener::init())
         .manage(AgentProcess::default())
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "显示 BerkshireNexus", true, None::<&str>)?;
@@ -800,6 +917,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
             analyze_tickers,
+            analyze_selection,
             run_paper_cycle,
             load_desktop_settings,
             save_desktop_settings,
@@ -818,6 +936,9 @@ pub fn run() {
             verify_binance_credentials,
             live_account,
             daily_briefing,
+            sector_overview,
+            sector_constituents,
+            search_tickers,
             screen_market,
             live_reconcile,
             live_accept_disclaimer,

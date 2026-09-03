@@ -16,7 +16,12 @@ from ..learning.registry import ChampionChallengerRegistry
 from ..data.attention import AttentionService, NewsSentiment
 from ..data.fetcher import DataFetcher
 from ..data.price_stream import EquityPriceStream
-from ..data.screener import MarketScreener, segment_catalogue
+from ..data.screener import (
+    MarketScreener,
+    SectorBrowser,
+    sector_catalogue,
+    segment_catalogue,
+)
 from ..research.briefing import BriefingComposer
 from ..research.ai import AIResearchService
 from ..research.config import ResearchConfig
@@ -57,6 +62,9 @@ def json_safe(value: Any) -> Any:
 class DesktopService:
     def __init__(self, state_directory: Union[Path, str]):
         self.state_directory = Path(state_directory).expanduser().resolve()
+        # Shared across calls so browsing sectors does not re-download NASDAQ's
+        # ~7,100-row screener on every click (6.1s cold, 0.01s warm).
+        self._sector_browser = SectorBrowser()
 
     def snapshot(self) -> Dict[str, Any]:
         portfolio = self._read_json(self.state_directory / "paper_portfolio.json", {})
@@ -673,6 +681,172 @@ class DesktopService:
         payload = briefing.to_dict()
         payload["reports"] = [self._report(report) for report in reports]
         return json_safe(payload)
+
+    # ------------------------------------------------------------------
+    # Analysis surface: browse the whole market, not just the AI thesis.
+    #
+    # The briefing answers one fixed question ("what should I do in the AI supply
+    # chain today"). These let the user point the same engines at anything —
+    # any sector, any ticker — and get a conclusion in the identical shape, so a
+    # card means the same thing wherever it appears.
+    # ------------------------------------------------------------------
+
+    def sector_overview(self, api_key: str = "", api_secret: str = "") -> Dict[str, Any]:
+        """Every sector with today's breadth, restricted to tradable names."""
+
+        tradable = self._tradable_or_none(api_key, api_secret)
+        return json_safe({
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "sectors": self._sector_browser.overview(tradable=tradable),
+            "catalogue": sector_catalogue(),
+            # The AI-chain segments stay available as a second lens.
+            "segments": segment_catalogue(),
+            "tradable_filtered": tradable is not None,
+        })
+
+    def sector_constituents(
+        self,
+        sector_id: str,
+        api_key: str = "",
+        api_secret: str = "",
+        *,
+        limit: int = 12,
+        order: str = "dollar_volume",
+    ) -> Dict[str, Any]:
+        """The notable names in one sector, before any deep analysis."""
+
+        tradable = self._tradable_or_none(api_key, api_secret)
+        return json_safe({
+            "sector": sector_id,
+            "order": order,
+            "rows": self._sector_browser.top_in_sector(
+                sector_id, limit=limit, tradable=tradable, order=order,
+            ),
+        })
+
+    def search_tickers(
+        self,
+        query: str,
+        api_key: str = "",
+        api_secret: str = "",
+        *,
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        """Ticker/company search across every listing."""
+
+        tradable = self._tradable_or_none(api_key, api_secret)
+        return json_safe({
+            "query": query,
+            "rows": self._sector_browser.search(query, limit=limit, tradable=tradable),
+        })
+
+    def analyze_tickers(
+        self,
+        tickers: Sequence[str],
+        api_key: str = "",
+        api_secret: str = "",
+        *,
+        research_config: Optional[Dict[str, Any]] = None,
+        ai_api_key: str = "",
+        minimum_score: float = 60.0,
+        label: str = "",
+    ) -> Dict[str, Any]:
+        """Run the full pipeline over an arbitrary ticker list.
+
+        Deliberately reuses `BriefingComposer` rather than assembling a parallel
+        payload: the analysis tab must render the *same* conclusion object as the
+        briefing, or the two surfaces would drift the way the briefing and the
+        execution preview once did.
+
+        Credentials are optional. Without them venue prices and holdings are
+        unavailable, so the analysis runs on public data alone and says so —
+        which is also what happens when Binance is geo-blocked.
+        """
+
+        normalized = self._tickers(tickers)
+        if not normalized:
+            raise ValueError("at least one ticker is required")
+        if len(normalized) > 25:
+            # Each name costs several provider calls; a runaway list would take
+            # minutes and hammer the endpoints.
+            raise ValueError("最多一次分析 25 只标的")
+
+        prices: Dict[str, float] = {}
+        account: Dict[str, Any] = {}
+        venue_error = ""
+        if api_key:
+            try:
+                client = BinanceStocksClient(api_key=api_key, api_secret=api_secret)
+                for ticker in normalized:
+                    try:
+                        price = merge_quote_price(client.latest_quote(ticker))
+                    except (BinanceAPIError, ValueError):
+                        continue
+                    if price > 0.0:
+                        prices[ticker] = price
+                if api_secret:
+                    account = self.live_account(api_key, api_secret)
+            except (BinanceAPIError, ValueError) as error:
+                # Geo-block or bad credentials: degrade to public data rather
+                # than failing the whole analysis.
+                venue_error = str(error)[:200]
+
+        config = ResearchConfig.from_dict(research_config or {})
+        ai_service = AIResearchService(config, ai_api_key) if config.ai_enabled else None
+
+        attention_service = AttentionService(cache_dir=self.state_directory)
+        attention = attention_service.collect(normalized, include_news=False)
+        sentiment_scores = self._score_sentiment(
+            attention_service, normalized, ai_service, attention,
+        )
+
+        reports = OmniAlphaOrchestrator(
+            config,
+            ai_api_key,
+            venue_prices=prices,
+            news_sentiment=sentiment_scores,
+        ).compare_multiple(normalized)
+
+        # `screened` supplies the segment labels the composer puts on each card.
+        shortlist = [
+            {
+                "ticker": report.financials.ticker,
+                "segment": "",
+                "segment_label": report.financials.sector or "",
+            }
+            for report in reports
+        ]
+        composed = BriefingComposer(ai_service).compose(
+            reports=reports,
+            screened={"shortlist": shortlist, "segment_catalogue": []},
+            account=account,
+            minimum_score=minimum_score,
+            attention=attention,
+        )
+        payload = composed.to_dict()
+        payload["reports"] = [self._report(report) for report in reports]
+        payload["label"] = label
+        payload["venue_priced"] = sorted(prices)
+        payload["venue_error"] = venue_error
+        return json_safe(payload)
+
+    def _tradable_or_none(self, api_key: str, api_secret: str) -> Optional[set]:
+        """Binance's tradable set, or None when it cannot be reached.
+
+        None means "do not filter" rather than "nothing is tradable": with the
+        API geo-blocked, filtering on an empty set would show an empty market and
+        look like the screener broke.
+        """
+
+        if not api_key:
+            return None
+        try:
+            symbols = set(BinanceStocksClient(
+                api_key=api_key, api_secret=api_secret,
+            ).tradable_symbols())
+        except (BinanceAPIError, ValueError):
+            return None
+        return symbols or None
 
     @staticmethod
     def _score_sentiment(

@@ -349,14 +349,10 @@ class DataFetcher:
             # endpoint returns nothing for revenue/equity/EPS. Verified live —
             # QQQM/SPYM/SMH/COWZ/URA all come back with zeros and are absent
             # from the stock screener entirely, while NVDA/CRM/TSM populate.
-            is_etf=bool(
-                data.get("is_etf")
-                or (
-                    not data.get("revenue")
-                    and not data.get("shareholders_equity")
-                    and not data.get("_ttm_eps")
-                )
-            ),
+            # Set only by an explicit positive check against NASDAQ's ETF
+            # endpoint (see `_is_nasdaq_etf`). Never inferred from missing
+            # fundamentals, which cannot distinguish an index from a failed fetch.
+            is_etf=bool(data.get("is_etf")),
             shares_outstanding=(
                 float(data["market_cap"]) / float(data["price"])
                 if data.get("market_cap") and data.get("price") else 0.0
@@ -469,6 +465,26 @@ class DataFetcher:
             out["volumes"].append(volume_f if math.isfinite(volume_f) else 0.0)
         return out
 
+    def _is_nasdaq_etf(self, ticker: str) -> bool:
+        """Whether NASDAQ recognises this symbol as an ETF.
+
+        A positive test. The alternative — "no fundamentals, therefore an index"
+        — cannot tell an ETF apart from a company whose data call failed.
+        Failures return False, so an unreachable endpoint degrades to "treat it
+        as a stock", which is the conservative direction: a stock gets the
+        tighter single-name position cap and a real valuation attempt.
+        """
+
+        try:
+            payload = self._json(
+                f"https://api.nasdaq.com/api/quote/{ticker}/summary?assetclass=etf",
+                self.nasdaq_headers,
+            )
+        except Exception:
+            return False
+        data = payload.get("data")
+        return isinstance(data, dict) and bool(data.get("summaryData"))
+
     def _nasdaq_bundle(self, ticker: str) -> Dict[str, Any]:
         endpoints = {
             "summary": f"https://api.nasdaq.com/api/quote/{ticker}/summary?assetclass=stocks",
@@ -494,6 +510,17 @@ class DataFetcher:
                 except Exception as error:
                     errors.append(f"{name}: {self._safe_error(error)}")
         if "financials" not in payloads or "summary" not in payloads:
+            # No company fundamentals. Two very different causes, and conflating
+            # them is a real sizing bug: an ETF legitimately has no issuer income
+            # statement, while a stock whose fetch merely failed still does.
+            # Verified live, Ferguson (FERG) failed transiently and was read as an
+            # ETF, which skips the DCF and widens its position cap 6% -> 30%.
+            #
+            # NASDAQ answers `assetclass=etf` only for real ETFs (QQQM: OK;
+            # FERG/NVDA/SPCX: "Symbol not exists"), so ask it directly rather than
+            # inferring from absence.
+            if self._is_nasdaq_etf(ticker):
+                return {"is_etf": True, "name": None, "sector": None, "description": None}
             raise ValueError("; ".join(errors) or "Nasdaq fundamentals are unavailable")
 
         summary = dict(payloads["summary"].get("summaryData", {}))

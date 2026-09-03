@@ -36,10 +36,12 @@ import {
   Zap,
 } from "lucide-react";
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { desktopBridge } from "./bridge";
 import { defaultSettings } from "./mock";
 import { LIVE_ACKNOWLEDGEMENT } from "./types";
 import type {
+  BriefingIdea,
   CredentialCheck,
   DailyBriefing,
   DesktopSettings,
@@ -47,6 +49,8 @@ import type {
   LiveCycleResult,
   PageId,
   RiskConfig,
+  ScreenedStock,
+  SectorSummary,
 } from "./types";
 
 type BusyAction =
@@ -190,6 +194,7 @@ function Metric({ label, value, detail, tone }: { label: string; value: ReactNod
 const navItems: Array<{ id: PageId; label: string; description: string; icon: typeof Activity }> = [
   { id: "dashboard", label: "仪表盘", description: "收益与持仓", icon: LayoutDashboard },
   { id: "briefing", label: "日报", description: "AI 产业链埋伏", icon: Newspaper },
+  { id: "analysis", label: "分析", description: "板块与个股", icon: Search },
   { id: "strategy", label: "策略", description: "预览与下单", icon: Zap },
   { id: "settings", label: "设置", description: "凭证与风控", icon: SettingsIcon },
 ];
@@ -197,6 +202,7 @@ const navItems: Array<{ id: PageId; label: string; description: string; icon: ty
 const pageMeta: Record<PageId, { eyebrow: string; title: string; intro: string }> = {
   dashboard: { eyebrow: "PORTFOLIO / LIVE", title: "仪表盘", intro: "真实持仓、成本价与收益。数据直接来自 Binance，不是本地推算。" },
   briefing: { eyebrow: "RESEARCH / DAILY", title: "AI 产业链埋伏日报", intro: "全市场筛选 → 分段扫描 → 结合成本价给出加仓/减仓判断。" },
+  analysis: { eyebrow: "RESEARCH / ON-DEMAND", title: "个股与板块分析", intro: "按板块浏览全市场，或直接搜索个股，用与日报同一套引擎出结论。" },
   strategy: { eyebrow: "EXECUTION / GATED", title: "策略执行", intro: "自动出方案，真实下单需要你输入确认短语。" },
   settings: { eyebrow: "SYSTEM / CREDENTIALS", title: "设置", intro: "Key 与 Token 只写入 macOS 钥匙串，不进配置文件或日志。" },
 };
@@ -247,6 +253,31 @@ const RSI_LABEL: Record<string, string> = {
   oversold: "超卖",
   neutral: "中性",
 };
+
+/** External link that actually opens.
+ *
+ * A plain <a target="_blank"> is inert inside a Tauri webview — there is no
+ * browser to hand the navigation to, so the news links rendered as links, showed
+ * a pointer cursor, and did nothing on click. Routing through the opener plugin
+ * hands the URL to the OS default browser. `href` is kept so the URL still shows
+ * in the status bar and can be copied from the context menu.
+ */
+function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
+  if (!href) return <>{children}</>;
+  return (
+    <a
+      href={href}
+      onClick={(event) => {
+        event.preventDefault();
+        // A dead link is better than a crash: the report still renders if the
+        // OS refuses the handoff.
+        void openUrl(href).catch(() => undefined);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
 
 /** Whether daily and weekly agree — the most decision-relevant field. */
 const AGREEMENT_LABEL: Record<string, string> = {
@@ -743,6 +774,531 @@ function Dashboard({
   );
 }
 
+/** One analysed name, rendered identically on the briefing and analysis tabs.
+ *
+ * Extracted rather than duplicated: the two surfaces must show the same
+ * conclusion for the same ticker, and a copy would drift the way the briefing
+ * and the execution preview once did.
+ */
+function IdeaCard({
+  idea,
+  expanded,
+  onToggle,
+}: {
+  idea: BriefingIdea;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className={`idea-card action-${idea.action.toLowerCase()}`} key={idea.ticker}>
+      <button className="idea-head" onClick={() => onToggle()}>
+        <div className="idea-main">
+          <div className="idea-id">
+            <strong className="mono">{idea.ticker}</strong>
+            <StatusMark tone={ACTION_TONE[idea.action] ?? "neutral"}>{ACTION_LABEL[idea.action] ?? idea.action}</StatusMark>
+            {idea.buzz_crowded && <span className="crowded-tag" title={idea.buzz_note}>拥挤</span>}
+          </div>
+          <span className="idea-segment muted">{idea.segment_label}</span>
+        </div>
+
+        {/* Direct grid children so all rows share one set of column
+            tracks; always rendered so an absent value cannot shift
+            the columns after it. */}
+        <span className="idea-cell">
+          <em className="idea-cap">分</em>
+          <strong>{idea.score.toFixed(1)}</strong>
+        </span>
+        <span className="idea-cell">
+          <em className="idea-cap">动量</em>
+          <strong>{idea.momentum_score.toFixed(1)}</strong>
+        </span>
+        <span className="idea-cell">
+          <em className="idea-cap">技术</em>
+          {idea.technical_available && idea.technical_score != null ? (
+            <strong>
+              {idea.technical_score.toFixed(0)}
+              <i className={TREND_TONE[idea.trend_alignment ?? ""] ?? ""}>
+                {TREND_LABEL[idea.trend_alignment ?? ""] ?? ""}
+              </i>
+            </strong>
+          ) : <strong className="muted">—</strong>}
+        </span>
+        <span className="idea-cell">
+          <em className="idea-cap">现价</em>
+          <strong>
+            {money.format(idea.price)}
+            <i className={idea.change_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.change_pct)}%</i>
+          </strong>
+        </span>
+        <span className="idea-cell">
+          <em className="idea-cap">成本</em>
+          {idea.held_quantity > 0 ? (
+            <strong>
+              {money.format(idea.average_cost)}
+              <i className={idea.unrealised_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.unrealised_pct, 1)}%</i>
+            </strong>
+          ) : <strong className="muted">未持仓</strong>}
+        </span>
+
+        <Sparkline points={idea.price_history ?? []} low={idea.fifty_two_week_low} high={idea.fifty_two_week_high} width={92} height={28} />
+        <ChevronRight size={14} className={`idea-chevron ${expanded ? "rotated" : ""}`} />
+      </button>
+      {expanded && (
+        <div className="idea-body">
+          <p><strong>判定依据</strong></p>
+          <ul>{idea.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>
+          {idea.fifty_two_week_high > idea.fifty_two_week_low && (
+            <>
+              <p><strong>一年走势</strong></p>
+              <div className="chart-row">
+                <Sparkline points={idea.price_history ?? []} low={idea.fifty_two_week_low} high={idea.fifty_two_week_high} width={260} height={56} />
+                <div className="range-meta">
+                  <span>52周低 {money.format(idea.fifty_two_week_low)}</span>
+                  <span>现价 {money.format(idea.price)}</span>
+                  <span>52周高 {money.format(idea.fifty_two_week_high)}</span>
+                  <span className="muted">
+                    区间分位 {(((idea.price - idea.fifty_two_week_low) / (idea.fifty_two_week_high - idea.fifty_two_week_low)) * 100).toFixed(0)}%
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
+          <p className="muted">
+            仓位上限 {idea.position_cap_pct.toFixed(1)}%
+            {idea.held_quantity > 0 ? ` · 当前 ${idea.weight_pct.toFixed(2)}%` : ""}
+            {" · "}安全边际 {signed(idea.margin_of_safety_pct, 1)}%
+            {" · "}瓶颈 L{idea.chokepoint_level}
+            {(idea.universe_size ?? 0) > 0 && (
+              <>
+                {" · "}同批排名 {(idea.universe_percentile ?? 0).toFixed(0)} 分位
+                （共 {idea.universe_size} 只）
+              </>
+            )}
+          </p>
+          {idea.ai_summary && (
+            <>
+              <p><strong>AI 综合（信心 {idea.ai_action_bias || "—"}）</strong></p>
+              {idea.ai_summary.split("\n").map((line, index) => <p key={index}>{line}</p>)}
+              {idea.ai_citations.length > 0 && (
+                <p className="muted">引用证据：{idea.ai_citations.join("、")}</p>
+              )}
+            </>
+          )}
+          {(idea.buzz_note || idea.news_available) && (
+            <>
+              <p><strong>关注度与情绪</strong></p>
+              <ul>
+                {idea.buzz_note && <li>{idea.buzz_note}</li>}
+                {idea.news_available && (
+                  <li>
+                    新闻情绪 {idea.news_label}（{idea.news_score >= 0 ? "+" : ""}{idea.news_score.toFixed(3)}），
+                    共 {idea.news_article_count} 篇
+                  </li>
+                )}
+              </ul>
+              <p className="muted">社交热度仅作拥挤度参考，不构成买入理由。</p>
+            </>
+          )}
+          {idea.technical_available && (
+            <>
+              <p><strong>技术面（日线 + 周线）</strong></p>
+              {idea.technical_verdict && (
+                <p className="technical-verdict">{idea.technical_verdict}</p>
+              )}
+              {idea.timeframe_agreement && (
+                <p>
+                  <StatusMark tone={AGREEMENT_TONE[idea.timeframe_agreement] ?? "neutral"}>
+                    {AGREEMENT_LABEL[idea.timeframe_agreement] ?? ""}
+                  </StatusMark>
+                  {idea.breakout_state && (
+                    <StatusMark tone={idea.breakout_state === "breakout" ? "good" : "risk"}>
+                      {idea.breakout_state === "breakout" ? "突破" : "破位"}
+                      {idea.breakout_level != null && ` ${money.format(idea.breakout_level)}`}
+                    </StatusMark>
+                  )}
+                  {idea.ema_slow_break && (
+                    <StatusMark tone={idea.ema_slow_break === "reclaimed" ? "good" : "risk"}>
+                      {idea.ema_slow_break === "reclaimed" ? "收复 EMA129" : "失守 EMA129"}
+                    </StatusMark>
+                  )}
+                  {idea.divergence && (
+                    <StatusMark tone={idea.divergence === "bearish" ? "warn" : "neutral"}>
+                      {idea.divergence === "bearish" ? "顶背离" : "底背离"}
+                    </StatusMark>
+                  )}
+                </p>
+              )}
+              <ul>
+                {(idea.technical_notes ?? []).map((note, index) => (
+                  <li key={index}>{note}</li>
+                ))}
+              </ul>
+              <table className="data-table compact">
+                <thead>
+                  <tr>
+                    <th>EMA5</th><th>EMA60</th><th>EMA129</th>
+                    <th>MACD</th><th>信号</th><th>柱</th>
+                    <th>RSI</th><th>ADX</th><th>ATR</th>
+                    <th>区间</th><th>周线</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="mono">
+                    <td>{idea.ema_fast?.toFixed(2) ?? "—"}</td>
+                    <td>{idea.ema_mid?.toFixed(2) ?? "—"}</td>
+                    <td>{idea.ema_slow?.toFixed(2) ?? "—"}</td>
+                    <td className={(idea.macd ?? 0) >= 0 ? "pnl-up" : "pnl-down"}>
+                      {idea.macd?.toFixed(3) ?? "—"}
+                    </td>
+                    <td>{idea.macd_signal?.toFixed(3) ?? "—"}</td>
+                    <td className={(idea.macd_histogram ?? 0) >= 0 ? "pnl-up" : "pnl-down"}>
+                      {idea.macd_histogram?.toFixed(3) ?? "—"}
+                    </td>
+                    <td>
+                      {idea.rsi?.toFixed(1) ?? "—"}
+                      {idea.rsi_zone && idea.rsi_zone !== "neutral" && (
+                        <span className="muted"> {RSI_LABEL[idea.rsi_zone]}</span>
+                      )}
+                    </td>
+                    <td>{idea.adx?.toFixed(1) ?? "—"}</td>
+                    <td>{idea.atr_pct != null ? `${idea.atr_pct.toFixed(1)}%` : "—"}</td>
+                    <td>
+                      {idea.range_position_pct != null
+                        ? `${idea.range_position_pct.toFixed(0)}%` : "—"}
+                    </td>
+                    <td className={TREND_TONE[idea.weekly_trend_alignment ?? ""] ?? ""}>
+                      {TREND_LABEL[idea.weekly_trend_alignment ?? ""] ?? "—"}
+                      {idea.weekly_rsi != null && (
+                        <span className="muted"> {idea.weekly_rsi.toFixed(0)}</span>
+                      )}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <p className="muted">
+                技术面回答"现在是不是买点"，基本面回答"要不要拥有"。
+                {(idea.adx ?? 99) < 20 && " ADX 偏低，均线与金叉信号可靠度下降。"}
+              </p>
+            </>
+          )}
+          {(idea.news_drivers?.length ?? 0) > 0 && (
+            <>
+              <p><strong>近期动态</strong></p>
+              <ul>
+                {idea.news_drivers!.map((item, index) => (
+                  <li key={index}>
+                    {item.url ? (
+                      <ExternalLink href={item.url}>{item.title}</ExternalLink>
+                    ) : item.title}
+                    {item.source && <span className="muted"> — {item.source}</span>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {idea.news.length > 0 && (
+            <>
+              <p><strong>新闻证据</strong></p>
+              <ul>
+                {idea.news.map((item) => (
+                  <li key={item.evidence_id}>
+                    <span className="mono muted">{item.evidence_id}</span>{" "}
+                    <ExternalLink href={item.url}>{item.title}</ExternalLink>
+                    <span className="muted"> — {item.publisher}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** On-demand analysis: browse any sector, search any ticker.
+ *
+ * The briefing answers one fixed question about the AI supply chain. This points
+ * the same engines at anything else and renders the identical `IdeaCard`, so a
+ * conclusion means the same thing on both tabs.
+ */
+function AnalysisPage({
+  settings,
+  busy,
+  elapsed,
+  onNotify,
+}: {
+  settings: DesktopSettings;
+  busy: BusyAction;
+  elapsed: number;
+  onNotify: (tone: Toast["tone"], message: string) => void;
+}) {
+  const [sectors, setSectors] = useState<SectorSummary[] | null>(null);
+  const [tradableFiltered, setTradableFiltered] = useState(true);
+  const [activeSector, setActiveSector] = useState<string | null>(null);
+  const [constituents, setConstituents] = useState<ScreenedStock[]>([]);
+  const [order, setOrder] = useState("dollar_volume");
+  const [query, setQuery] = useState("");
+  const [matches, setMatches] = useState<ScreenedStock[]>([]);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [result, setResult] = useState<DailyBriefing | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [loading, setLoading] = useState<"sectors" | "rows" | "search" | "run" | null>(null);
+
+  // Sectors load once when the tab first opens; the backend caches the
+  // underlying 7,100-row screener for 5 minutes anyway.
+  useEffect(() => {
+    if (sectors !== null) return;
+    setLoading("sectors");
+    desktopBridge
+      .sectorOverview()
+      .then((value) => {
+        setSectors(value.sectors);
+        setTradableFiltered(value.tradable_filtered);
+      })
+      .catch((error) => onNotify("error", asError(error)))
+      .finally(() => setLoading(null));
+  }, [sectors, onNotify]);
+
+  const loadSector = useCallback(
+    async (sectorId: string, nextOrder = order) => {
+      setActiveSector(sectorId);
+      setLoading("rows");
+      try {
+        const value = await desktopBridge.sectorConstituents(sectorId, {
+          limit: 12,
+          order: nextOrder,
+        });
+        setConstituents(value.rows);
+      } catch (error) {
+        onNotify("error", asError(error));
+      } finally {
+        setLoading(null);
+      }
+    },
+    [order, onNotify],
+  );
+
+  const runSearch = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      if (!query.trim()) return;
+      setLoading("search");
+      try {
+        const value = await desktopBridge.searchTickers(query.trim(), 20);
+        setMatches(value.rows);
+        if (value.rows.length === 0) onNotify("info", `没有找到与「${query}」匹配的标的`);
+      } catch (error) {
+        onNotify("error", asError(error));
+      } finally {
+        setLoading(null);
+      }
+    },
+    [query, onNotify],
+  );
+
+  const toggle = (ticker: string) =>
+    setPicked((current) =>
+      current.includes(ticker)
+        ? current.filter((item) => item !== ticker)
+        : current.length >= 25
+          ? current
+          : [...current, ticker],
+    );
+
+  const analyse = async () => {
+    if (picked.length === 0) return;
+    setLoading("run");
+    try {
+      const label = activeSector
+        ? (sectors?.find((item) => item.id === activeSector)?.label ?? "")
+        : "自选";
+      const value = await desktopBridge.analyzeSelection(picked, settings, { label });
+      setResult(value);
+      onNotify("success", `已分析 ${picked.length} 只标的`);
+    } catch (error) {
+      onNotify("error", asError(error));
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const rows = matches.length > 0 ? matches : constituents;
+  const busyAny = loading !== null || busy !== null;
+
+  return (
+    <div className="page">
+      <section className="ruled-section">
+        <SectionHeading
+          index="01"
+          title="搜索个股"
+          note="输入代码或公司名，跨全市场匹配；代码精确匹配优先。"
+        />
+        <form className="search-row" onSubmit={runSearch}>
+          <input
+            className="text-input"
+            placeholder="例如 NVDA、Micron、Tesla"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <button className="secondary-button" type="submit" disabled={busyAny || !query.trim()}>
+            {loading === "search" ? <LoaderCircle className="spin" size={14} /> : <Search size={14} />}
+            搜索
+          </button>
+          {matches.length > 0 && (
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => { setMatches([]); setQuery(""); }}
+            >
+              清除结果
+            </button>
+          )}
+        </form>
+      </section>
+
+      <section className="ruled-section">
+        <SectionHeading
+          index="02"
+          title="按板块浏览"
+          note={
+            tradableFiltered
+              ? "仅显示 Binance 可交易的标的。"
+              : "Binance 不可达，显示全市场（其中部分可能无法交易）。"
+          }
+        />
+        {sectors === null ? (
+          <p className="muted-note">
+            {loading === "sectors" ? "正在读取全市场板块…" : "板块数据不可用。"}
+          </p>
+        ) : (
+          <div className="sector-grid">
+            {sectors.filter((item) => item.count > 0).map((sector) => (
+              <button
+                key={sector.id}
+                className={`sector-tile ${activeSector === sector.id ? "active" : ""}`}
+                onClick={() => void loadSector(sector.id)}
+              >
+                <span className="sector-name">{sector.label}</span>
+                <strong className={sector.average_change_pct >= 0 ? "pnl-up" : "pnl-down"}>
+                  {signed(sector.average_change_pct)}%
+                </strong>
+                <span className="muted">
+                  {sector.count} 只 · 上涨 {sector.breadth_pct.toFixed(0)}%
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {rows.length > 0 && (
+        <section className="ruled-section">
+          <SectionHeading
+            index="03"
+            title={matches.length > 0 ? "搜索结果" : "板块内标的"}
+            note="勾选后运行分析，一次最多 25 只。"
+            action={
+              matches.length === 0 && activeSector ? (
+                <div className="button-row">
+                  {[
+                    ["dollar_volume", "成交额"],
+                    ["gainers", "涨幅"],
+                    ["losers", "跌幅"],
+                    ["market_cap", "市值"],
+                  ].map(([value, text]) => (
+                    <button
+                      key={value}
+                      className={`text-button ${order === value ? "active" : ""}`}
+                      onClick={() => { setOrder(value); void loadSector(activeSector, value); }}
+                    >
+                      {text}
+                    </button>
+                  ))}
+                </div>
+              ) : undefined
+            }
+          />
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>选择</th><th>代码</th><th>名称</th>
+                <th>现价</th><th>涨跌</th><th>成交额</th><th>板块</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.ticker}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={picked.includes(row.ticker)}
+                      onChange={() => toggle(row.ticker)}
+                    />
+                  </td>
+                  <td className="mono">{row.ticker}</td>
+                  <td>{row.name}</td>
+                  <td className="mono">{money.format(row.last_sale)}</td>
+                  <td className={row.change_pct >= 0 ? "pnl-up" : "pnl-down"}>
+                    {signed(row.change_pct)}%
+                  </td>
+                  <td className="mono">{compactMoney.format(row.dollar_volume)}</td>
+                  <td className="muted">{row.segment_label || row.sector}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="button-row">
+            <button className="primary-button" disabled={busyAny || picked.length === 0} onClick={() => void analyse()}>
+              {loading === "run"
+                ? <><LoaderCircle className="spin" size={15} /> 分析中… {elapsed}s</>
+                : <><BrainCircuit size={15} /> 分析选中的 {picked.length} 只</>}
+            </button>
+            {picked.length > 0 && (
+              <button className="text-button" onClick={() => setPicked([])}>清空选择</button>
+            )}
+            {picked.length >= 25 && <span className="muted">已达一次 25 只上限</span>}
+          </div>
+        </section>
+      )}
+
+      {result && (
+        <section className="ruled-section">
+          <SectionHeading
+            index="04"
+            title="分析结论"
+            note="与日报同一套引擎：确定性规则给判定，AI 负责解释与反驳。"
+          />
+          {result.ai_status === "ok" && result.market_note ? (
+            <p className="market-note">{result.market_note}</p>
+          ) : (
+            <p className="muted-note">
+              {result.ai_status === "error"
+                ? `AI 综合失败：${result.ai_error}`
+                : "AI 综合未启用，以下结论来自确定性引擎。"}
+            </p>
+          )}
+          {result.ideas.length > 1 && (
+            <p className="muted-note">
+              相对排名基于本次选中的 {result.ideas.length} 只标的，不是全市场分位。
+            </p>
+          )}
+          <div className="idea-list">
+            {result.ideas.map((idea) => (
+              <IdeaCard
+                key={idea.ticker}
+                idea={idea}
+                expanded={expanded === idea.ticker}
+                onToggle={() => setExpanded(expanded === idea.ticker ? null : idea.ticker)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 /** Daily briefing: screening, segment scan, and cost-aware ADD/TRIM calls. */
 function BriefingPage({
   briefing,
@@ -843,229 +1399,12 @@ function BriefingPage({
             <SectionHeading index="04" title="今日建议" note="判定由确定性规则给出；AI 负责解释与反驳，不负责决定。" />
             <div className="idea-list">
               {briefing.ideas.map((idea) => (
-                <div className={`idea-card action-${idea.action.toLowerCase()}`} key={idea.ticker}>
-                  <button className="idea-head" onClick={() => setExpanded(expanded === idea.ticker ? null : idea.ticker)}>
-                    <div className="idea-main">
-                      <div className="idea-id">
-                        <strong className="mono">{idea.ticker}</strong>
-                        <StatusMark tone={ACTION_TONE[idea.action] ?? "neutral"}>{ACTION_LABEL[idea.action] ?? idea.action}</StatusMark>
-                        {idea.buzz_crowded && <span className="crowded-tag" title={idea.buzz_note}>拥挤</span>}
-                      </div>
-                      <span className="idea-segment muted">{idea.segment_label}</span>
-                    </div>
-
-                    {/* Direct grid children so all rows share one set of column
-                        tracks; always rendered so an absent value cannot shift
-                        the columns after it. */}
-                    <span className="idea-cell">
-                      <em className="idea-cap">分</em>
-                      <strong>{idea.score.toFixed(1)}</strong>
-                    </span>
-                    <span className="idea-cell">
-                      <em className="idea-cap">动量</em>
-                      <strong>{idea.momentum_score.toFixed(1)}</strong>
-                    </span>
-                    <span className="idea-cell">
-                      <em className="idea-cap">技术</em>
-                      {idea.technical_available && idea.technical_score != null ? (
-                        <strong>
-                          {idea.technical_score.toFixed(0)}
-                          <i className={TREND_TONE[idea.trend_alignment ?? ""] ?? ""}>
-                            {TREND_LABEL[idea.trend_alignment ?? ""] ?? ""}
-                          </i>
-                        </strong>
-                      ) : <strong className="muted">—</strong>}
-                    </span>
-                    <span className="idea-cell">
-                      <em className="idea-cap">现价</em>
-                      <strong>
-                        {money.format(idea.price)}
-                        <i className={idea.change_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.change_pct)}%</i>
-                      </strong>
-                    </span>
-                    <span className="idea-cell">
-                      <em className="idea-cap">成本</em>
-                      {idea.held_quantity > 0 ? (
-                        <strong>
-                          {money.format(idea.average_cost)}
-                          <i className={idea.unrealised_pct >= 0 ? "pnl-up" : "pnl-down"}>{signed(idea.unrealised_pct, 1)}%</i>
-                        </strong>
-                      ) : <strong className="muted">未持仓</strong>}
-                    </span>
-
-                    <Sparkline points={idea.price_history ?? []} low={idea.fifty_two_week_low} high={idea.fifty_two_week_high} width={92} height={28} />
-                    <ChevronRight size={14} className={`idea-chevron ${expanded === idea.ticker ? "rotated" : ""}`} />
-                  </button>
-                  {expanded === idea.ticker && (
-                    <div className="idea-body">
-                      <p><strong>判定依据</strong></p>
-                      <ul>{idea.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>
-                      {idea.fifty_two_week_high > idea.fifty_two_week_low && (
-                        <>
-                          <p><strong>一年走势</strong></p>
-                          <div className="chart-row">
-                            <Sparkline points={idea.price_history ?? []} low={idea.fifty_two_week_low} high={idea.fifty_two_week_high} width={260} height={56} />
-                            <div className="range-meta">
-                              <span>52周低 {money.format(idea.fifty_two_week_low)}</span>
-                              <span>现价 {money.format(idea.price)}</span>
-                              <span>52周高 {money.format(idea.fifty_two_week_high)}</span>
-                              <span className="muted">
-                                区间分位 {(((idea.price - idea.fifty_two_week_low) / (idea.fifty_two_week_high - idea.fifty_two_week_low)) * 100).toFixed(0)}%
-                              </span>
-                            </div>
-                          </div>
-                        </>
-                      )}
-                      <p className="muted">
-                        仓位上限 {idea.position_cap_pct.toFixed(1)}%
-                        {idea.held_quantity > 0 ? ` · 当前 ${idea.weight_pct.toFixed(2)}%` : ""}
-                        {" · "}安全边际 {signed(idea.margin_of_safety_pct, 1)}%
-                        {" · "}瓶颈 L{idea.chokepoint_level}
-                        {(idea.universe_size ?? 0) > 0 && (
-                          <>
-                            {" · "}同批排名 {(idea.universe_percentile ?? 0).toFixed(0)} 分位
-                            （共 {idea.universe_size} 只）
-                          </>
-                        )}
-                      </p>
-                      {idea.ai_summary && (
-                        <>
-                          <p><strong>AI 综合（信心 {idea.ai_action_bias || "—"}）</strong></p>
-                          {idea.ai_summary.split("\n").map((line, index) => <p key={index}>{line}</p>)}
-                          {idea.ai_citations.length > 0 && (
-                            <p className="muted">引用证据：{idea.ai_citations.join("、")}</p>
-                          )}
-                        </>
-                      )}
-                      {(idea.buzz_note || idea.news_available) && (
-                        <>
-                          <p><strong>关注度与情绪</strong></p>
-                          <ul>
-                            {idea.buzz_note && <li>{idea.buzz_note}</li>}
-                            {idea.news_available && (
-                              <li>
-                                新闻情绪 {idea.news_label}（{idea.news_score >= 0 ? "+" : ""}{idea.news_score.toFixed(3)}），
-                                共 {idea.news_article_count} 篇
-                              </li>
-                            )}
-                          </ul>
-                          <p className="muted">社交热度仅作拥挤度参考，不构成买入理由。</p>
-                        </>
-                      )}
-                      {idea.technical_available && (
-                        <>
-                          <p><strong>技术面（日线 + 周线）</strong></p>
-                          {idea.technical_verdict && (
-                            <p className="technical-verdict">{idea.technical_verdict}</p>
-                          )}
-                          {idea.timeframe_agreement && (
-                            <p>
-                              <StatusMark tone={AGREEMENT_TONE[idea.timeframe_agreement] ?? "neutral"}>
-                                {AGREEMENT_LABEL[idea.timeframe_agreement] ?? ""}
-                              </StatusMark>
-                              {idea.breakout_state && (
-                                <StatusMark tone={idea.breakout_state === "breakout" ? "good" : "risk"}>
-                                  {idea.breakout_state === "breakout" ? "突破" : "破位"}
-                                  {idea.breakout_level != null && ` ${money.format(idea.breakout_level)}`}
-                                </StatusMark>
-                              )}
-                              {idea.ema_slow_break && (
-                                <StatusMark tone={idea.ema_slow_break === "reclaimed" ? "good" : "risk"}>
-                                  {idea.ema_slow_break === "reclaimed" ? "收复 EMA129" : "失守 EMA129"}
-                                </StatusMark>
-                              )}
-                              {idea.divergence && (
-                                <StatusMark tone={idea.divergence === "bearish" ? "warn" : "neutral"}>
-                                  {idea.divergence === "bearish" ? "顶背离" : "底背离"}
-                                </StatusMark>
-                              )}
-                            </p>
-                          )}
-                          <ul>
-                            {(idea.technical_notes ?? []).map((note, index) => (
-                              <li key={index}>{note}</li>
-                            ))}
-                          </ul>
-                          <table className="data-table compact">
-                            <thead>
-                              <tr>
-                                <th>EMA5</th><th>EMA60</th><th>EMA129</th>
-                                <th>MACD</th><th>信号</th><th>柱</th>
-                                <th>RSI</th><th>ADX</th><th>ATR</th>
-                                <th>区间</th><th>周线</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              <tr className="mono">
-                                <td>{idea.ema_fast?.toFixed(2) ?? "—"}</td>
-                                <td>{idea.ema_mid?.toFixed(2) ?? "—"}</td>
-                                <td>{idea.ema_slow?.toFixed(2) ?? "—"}</td>
-                                <td className={(idea.macd ?? 0) >= 0 ? "pnl-up" : "pnl-down"}>
-                                  {idea.macd?.toFixed(3) ?? "—"}
-                                </td>
-                                <td>{idea.macd_signal?.toFixed(3) ?? "—"}</td>
-                                <td className={(idea.macd_histogram ?? 0) >= 0 ? "pnl-up" : "pnl-down"}>
-                                  {idea.macd_histogram?.toFixed(3) ?? "—"}
-                                </td>
-                                <td>
-                                  {idea.rsi?.toFixed(1) ?? "—"}
-                                  {idea.rsi_zone && idea.rsi_zone !== "neutral" && (
-                                    <span className="muted"> {RSI_LABEL[idea.rsi_zone]}</span>
-                                  )}
-                                </td>
-                                <td>{idea.adx?.toFixed(1) ?? "—"}</td>
-                                <td>{idea.atr_pct != null ? `${idea.atr_pct.toFixed(1)}%` : "—"}</td>
-                                <td>
-                                  {idea.range_position_pct != null
-                                    ? `${idea.range_position_pct.toFixed(0)}%` : "—"}
-                                </td>
-                                <td className={TREND_TONE[idea.weekly_trend_alignment ?? ""] ?? ""}>
-                                  {TREND_LABEL[idea.weekly_trend_alignment ?? ""] ?? "—"}
-                                  {idea.weekly_rsi != null && (
-                                    <span className="muted"> {idea.weekly_rsi.toFixed(0)}</span>
-                                  )}
-                                </td>
-                              </tr>
-                            </tbody>
-                          </table>
-                          <p className="muted">
-                            技术面回答"现在是不是买点"，基本面回答"要不要拥有"。
-                            {(idea.adx ?? 99) < 20 && " ADX 偏低，均线与金叉信号可靠度下降。"}
-                          </p>
-                        </>
-                      )}
-                      {(idea.news_drivers?.length ?? 0) > 0 && (
-                        <>
-                          <p><strong>近期动态</strong></p>
-                          <ul>
-                            {idea.news_drivers!.map((item, index) => (
-                              <li key={index}>
-                                {item.url ? (
-                                  <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
-                                ) : item.title}
-                                {item.source && <span className="muted"> — {item.source}</span>}
-                              </li>
-                            ))}
-                          </ul>
-                        </>
-                      )}
-                      {idea.news.length > 0 && (
-                        <>
-                          <p><strong>新闻证据</strong></p>
-                          <ul>
-                            {idea.news.map((item) => (
-                              <li key={item.evidence_id}>
-                                <span className="mono muted">{item.evidence_id}</span>{" "}
-                                <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a>
-                                <span className="muted"> — {item.publisher}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
+                <IdeaCard
+                  key={idea.ticker}
+                  idea={idea}
+                  expanded={expanded === idea.ticker}
+                  onToggle={() => setExpanded(expanded === idea.ticker ? null : idea.ticker)}
+                />
               ))}
             </div>
             <div className="button-row">
@@ -1887,6 +2226,8 @@ export default function App() {
         return <Dashboard account={account} busy={busy} onRefresh={() => loadAccount(false)} goTo={setPage} />;
       case "briefing":
         return <BriefingPage briefing={briefing} aiConfigured={aiKeyConfigured && settings.research.ai_enabled} busy={busy} elapsed={elapsed} onGenerate={generateBriefing} onExecute={sendToStrategy} goTo={setPage} />;
+      case "analysis":
+        return <AnalysisPage settings={settings} busy={busy} elapsed={elapsed} onNotify={notify} />;
       case "strategy":
         return (
           <StrategyPage

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 from typing import Optional
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.core.gates import (
     MIN_RANKED_UNIVERSE,
@@ -22,7 +22,7 @@ from src.core.orchestrator import rank_reports
 from src.core.technicals import TechnicalSignals
 from src.core import technicals as ta
 from src.core.valuation import ValuationEngine
-from src.data.fetcher import CompanyFinancials
+from src.data.fetcher import CompanyFinancials, DataFetcher
 from src.research.briefing import classify_action
 from src.research.news import NewsService
 from src.research.config import ResearchConfig
@@ -496,6 +496,40 @@ class StructuralAnalysisTests(unittest.TestCase):
         self.assertTrue(signals.verdict)
         # A technical call without a level that voids it is not a call.
         self.assertIn("失效", signals.verdict + signals.verdict)
+
+
+class EtfClassificationTests(unittest.TestCase):
+    """An ETF must be identified, never merely inferred from missing data.
+
+    The distinction carries real money: `is_etf` skips the DCF and widens the
+    position cap from the single-name 6% to 30%.
+    """
+
+    def _fetcher(self, *, etf_probe: bool):
+        fetcher = DataFetcher()
+        fetcher._is_nasdaq_etf = lambda ticker: etf_probe  # type: ignore[method-assign]
+        return fetcher
+
+    def test_failed_fundamentals_fetch_is_not_an_etf(self):
+        """Ferguson (FERG) failed transiently and was sized as a 30%-cap index."""
+
+        fetcher = self._fetcher(etf_probe=False)
+        with patch.object(fetcher, "_json", side_effect=OSError("nasdaq down")):
+            with self.assertRaises(ValueError):
+                fetcher._nasdaq_bundle("FERG")
+
+    def test_etf_endpoint_confirms_a_real_index(self):
+        fetcher = self._fetcher(etf_probe=True)
+        with patch.object(fetcher, "_json", side_effect=OSError("no company data")):
+            bundle = fetcher._nasdaq_bundle("QQQM")
+        self.assertTrue(bundle["is_etf"])
+
+    def test_probe_failure_degrades_to_stock(self):
+        """An unreachable probe must not promote a stock to a 30% cap."""
+
+        fetcher = DataFetcher()
+        with patch.object(fetcher, "_json", side_effect=OSError("offline")):
+            self.assertFalse(fetcher._is_nasdaq_etf("ANY"))
 
 
 class BriefingDecisionTests(unittest.TestCase):

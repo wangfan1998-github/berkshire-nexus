@@ -10,6 +10,9 @@ import type {
   LiveAccount,
   LiveCycleResult,
   ScreenResult,
+  SectorOverview,
+  SectorConstituents,
+  TickerSearchResult,
   LiveReconciliation,
 } from "./types";
 
@@ -186,6 +189,50 @@ export const desktopBridge = {
     if (isTauri) return invoke<ScreenResult>("screen_market", { perSegment });
     await wait(700);
     throw new Error("浏览器预览无法选股；请在 Tauri 桌面 App 中运行。");
+  },
+
+  async sectorOverview(): Promise<SectorOverview> {
+    if (isTauri) return invoke<SectorOverview>("sector_overview");
+    await wait(400);
+    throw new Error("浏览器预览无法读取全市场板块；请在 Tauri 桌面 App 中运行。");
+  },
+
+  async sectorConstituents(
+    sector: string,
+    options?: { limit?: number; order?: string },
+  ): Promise<SectorConstituents> {
+    if (isTauri) {
+      return invoke<SectorConstituents>("sector_constituents", {
+        sector,
+        limit: options?.limit ?? 12,
+        order: options?.order ?? "dollar_volume",
+      });
+    }
+    await wait(300);
+    throw new Error("浏览器预览无法读取板块成分；请在 Tauri 桌面 App 中运行。");
+  },
+
+  async searchTickers(query: string, limit = 20): Promise<TickerSearchResult> {
+    if (isTauri) return invoke<TickerSearchResult>("search_tickers", { query, limit });
+    await wait(200);
+    throw new Error("浏览器预览无法搜索标的；请在 Tauri 桌面 App 中运行。");
+  },
+
+  async analyzeSelection(
+    tickers: string[],
+    settings: DesktopSettings,
+    options?: { minimumScore?: number; label?: string },
+  ): Promise<DailyBriefing> {
+    if (isTauri) {
+      return invoke<DailyBriefing>("analyze_selection", {
+        tickers,
+        researchConfig: settings.research,
+        minimumScore: options?.minimumScore ?? 60,
+        label: options?.label ?? "",
+      });
+    }
+    await wait(700);
+    throw new Error("浏览器预览无法运行分析；请在 Tauri 桌面 App 中运行。");
   },
 
   async liveAccount(): Promise<LiveAccount> {

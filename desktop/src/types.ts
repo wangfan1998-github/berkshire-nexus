@@ -1,4 +1,4 @@
-export type PageId = "dashboard" | "briefing" | "strategy" | "settings";
+export type PageId = "dashboard" | "briefing" | "analysis" | "strategy" | "settings";
 
 export interface Holding {
   ticker: string;
@@ -574,4 +574,39 @@ export interface ScreenResult {
   held_tickers: string[];
   segment_catalogue: Array<{ id: string; label: string; role: string; industries: string[] }>;
   errors: Record<string, string>;
+}
+
+/** One sector's roll-up in the analysis tab. */
+export interface SectorSummary {
+  id: string;
+  label: string;
+  role: string;
+  count: number;
+  /** Dollar-volume weighted, so a micro-cap cannot swing the sector read. */
+  average_change_pct: number;
+  advancing: number;
+  declining: number;
+  /** Share of names advancing — can disagree with the weighted move. */
+  breadth_pct: number;
+  total_dollar_volume: number;
+}
+
+export interface SectorOverview {
+  generated_at_utc: string;
+  sectors: SectorSummary[];
+  catalogue: Array<{ id: string; label: string; role: string; match: string }>;
+  segments: Array<{ id: string; label: string; role: string; industries: string[] }>;
+  /** False when Binance was unreachable, so the list is the whole market. */
+  tradable_filtered: boolean;
+}
+
+export interface SectorConstituents {
+  sector: string;
+  order: string;
+  rows: ScreenedStock[];
+}
+
+export interface TickerSearchResult {
+  query: string;
+  rows: ScreenedStock[];
 }

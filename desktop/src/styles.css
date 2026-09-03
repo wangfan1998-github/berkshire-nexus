@@ -498,3 +498,49 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
   .idea-head .idea-cell:nth-of-type(1),
   .idea-head .idea-cell:nth-of-type(2) { display: none; }
 }
+
+/* --- Analysis tab -------------------------------------------------------- */
+/* Search row and sector grid. Styled to match the existing controls rather than
+   introducing a second visual language on a new page. */
+.search-row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+.text-input {
+  flex: 1;
+  min-width: 0;
+  height: 35px;
+  padding: 0 11px;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
+  background: #faf8f1;
+  border: 1px solid #c6c1b5;
+  border-radius: 3px;
+}
+.text-input:focus { outline: none; border-color: var(--green-dark); }
+.text-input::placeholder { color: var(--muted); }
+
+.sector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.sector-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 11px 12px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--line-dark);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 140ms ease, border 140ms ease, transform 140ms ease;
+}
+.sector-tile:hover { background: var(--paper-deep); transform: translateY(-1px); }
+.sector-tile.active { background: var(--paper-deep); border-color: var(--green-dark); }
+.sector-tile .sector-name { font-size: 11px; font-weight: 650; }
+.sector-tile strong { font-size: 13px; font-family: var(--mono); }
+.sector-tile .muted { font-size: 8px; }
+
+/* The active sort in the constituents header. */
+.text-button.active { color: var(--ink); font-weight: 700; text-decoration: underline; }

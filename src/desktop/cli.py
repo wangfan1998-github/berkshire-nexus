@@ -59,6 +59,24 @@ def main() -> None:
     screen.add_argument("--min-market-cap", type=float, default=2e9)
     screen.add_argument("--min-dollar-volume", type=float, default=2e7)
 
+    # Analysis surface: browse any sector, search any ticker, analyse on demand.
+    subparsers.add_parser("sector-overview")
+
+    constituents = subparsers.add_parser("sector-constituents")
+    constituents.add_argument("sector")
+    constituents.add_argument("--limit", type=int, default=12)
+    constituents.add_argument("--order", default="dollar_volume")
+
+    search = subparsers.add_parser("search-tickers")
+    search.add_argument("query")
+    search.add_argument("--limit", type=int, default=20)
+
+    analyze_many = subparsers.add_parser("analyze-tickers")
+    analyze_many.add_argument("tickers", nargs="+")
+    analyze_many.add_argument("--research-config-json", default="{}")
+    analyze_many.add_argument("--minimum-score", type=float, default=60.0)
+    analyze_many.add_argument("--label", default="")
+
     cancel_all = subparsers.add_parser("live-cancel-all")
     cancel_all.add_argument("--symbol", default="")
 
@@ -128,6 +146,30 @@ def main() -> None:
                 research_config=json.loads(args.research_config_json),
                 ai_api_key=os.environ.get("BERKSHIRE_NEXUS_AI_API_KEY", ""),
                 minimum_score=args.minimum_score,
+            )
+        elif args.command == "sector-overview":
+            value = service.sector_overview(binance_key, binance_secret)
+        elif args.command == "sector-constituents":
+            value = service.sector_constituents(
+                args.sector,
+                binance_key,
+                binance_secret,
+                limit=args.limit,
+                order=args.order,
+            )
+        elif args.command == "search-tickers":
+            value = service.search_tickers(
+                args.query, binance_key, binance_secret, limit=args.limit,
+            )
+        elif args.command == "analyze-tickers":
+            value = service.analyze_tickers(
+                args.tickers,
+                binance_key,
+                binance_secret,
+                research_config=json.loads(args.research_config_json),
+                ai_api_key=os.environ.get("BERKSHIRE_NEXUS_AI_API_KEY", ""),
+                minimum_score=args.minimum_score,
+                label=args.label,
             )
         elif args.command == "verify-credentials":
             value = service.verify_credentials(binance_key, binance_secret)
