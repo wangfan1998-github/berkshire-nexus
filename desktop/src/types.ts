@@ -556,6 +556,8 @@ export interface ScreenedStock {
   segment: string;
   segment_label: string;
   industry: string;
+  /** Chinese display label; falls back to the raw NASDAQ string when unmapped. */
+  industry_label: string;
   sector: string;
   market_cap: number;
   last_sale: number;

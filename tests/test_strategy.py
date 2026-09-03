@@ -23,6 +23,7 @@ from src.core.technicals import TechnicalSignals
 from src.core import technicals as ta
 from src.core.valuation import ValuationEngine
 from src.data.fetcher import CompanyFinancials, DataFetcher
+from src.data.screener import INDUSTRY_LABELS, industry_label
 from src.research.briefing import classify_action
 from src.research.news import NewsService
 from src.research.config import ResearchConfig
@@ -530,6 +531,36 @@ class EtfClassificationTests(unittest.TestCase):
         fetcher = DataFetcher()
         with patch.object(fetcher, "_json", side_effect=OSError("offline")):
             self.assertFalse(fetcher._is_nasdaq_etf("ANY"))
+
+
+class IndustryLabelTests(unittest.TestCase):
+    """Provider strings must not leak into a Chinese UI."""
+
+    def test_known_industry_is_translated(self):
+        self.assertEqual(industry_label("Semiconductors"), "半导体")
+        self.assertEqual(
+            industry_label("Computer Software: Prepackaged Software"),
+            "软件：套装软件",
+        )
+
+    def test_unknown_industry_falls_back_to_the_raw_string(self):
+        """NASDAQ can add an industry; a wrong guess is worse than English."""
+
+        self.assertEqual(industry_label("Quantum Widget Fabrication"), "Quantum Widget Fabrication")
+
+    def test_blank_input_does_not_crash(self):
+        self.assertEqual(industry_label(""), "")
+        self.assertEqual(industry_label(None), "")  # type: ignore[arg-type]
+
+    def test_every_label_is_actually_chinese(self):
+        """A copy-paste slip that left an English value would defeat the point."""
+
+        for source, label in INDUSTRY_LABELS.items():
+            with self.subTest(industry=source):
+                self.assertTrue(
+                    any("一" <= char <= "鿿" for char in label),
+                    f"{source!r} maps to {label!r}, which contains no Chinese",
+                )
 
 
 class BriefingDecisionTests(unittest.TestCase):

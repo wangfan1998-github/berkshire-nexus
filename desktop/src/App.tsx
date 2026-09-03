@@ -1316,7 +1316,7 @@ function AnalysisPage({
                         {signed(row.change_pct)}%
                       </td>
                       <td className="mono">{compactMoney.format(row.dollar_volume)}</td>
-                      <td className="muted">{row.industry || row.sector}</td>
+                      <td className="muted">{row.industry_label || row.industry || row.sector}</td>
                     </tr>
                   ))}
                 </tbody>
