@@ -635,3 +635,46 @@ button:disabled { opacity: .47; cursor: not-allowed; transform: none !important;
 .data-table tbody tr { cursor: pointer; }
 .data-table tbody tr.row-picked { background: var(--green-soft); }
 .data-table tbody tr.row-picked:hover { background: var(--green-soft); }
+
+/* --- Analysis: persistent selection tray --------------------------------- */
+/* The selection spans sectors and survives stepping back, so it needs a home
+   outside the table. Without this, picks made in another sector were invisible
+   and unremovable. */
+.selection-tray {
+  margin: 12px 0 0;
+  padding: 11px 13px;
+  background: var(--paper-deep);
+  border: 1px solid var(--line-dark);
+  border-radius: 5px;
+}
+.selection-head { display: flex; gap: 10px; align-items: center; }
+.selection-head strong { font-size: 11px; }
+.selection-head .muted { font-size: 9px; }
+.selection-head .text-button { margin-left: auto; }
+
+.selection-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.selection-chip {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 5px 4px 9px;
+  font-size: 10px;
+  background: var(--paper);
+  border: 1px solid var(--line-dark);
+  border-radius: 999px;
+}
+.selection-chip b { font-size: 10px; font-weight: 650; }
+.selection-chip i { font-family: var(--mono); font-size: 8px; font-style: normal; }
+.selection-chip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.selection-chip button:hover:not(:disabled) { color: var(--risk); background: var(--risk-soft); }
+.selection-actions { margin-top: 10px; }

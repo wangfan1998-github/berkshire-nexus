@@ -1026,6 +1026,9 @@ function IdeaCard({
 /** Rows shown before "load more". Enough to scan, short enough to see the end. */
 const PAGE_SIZE = 15;
 
+/** Backend rejects more than this per run; the UI stops you before the round trip. */
+const MAX_PICKS = 25;
+
 /** On-demand analysis: browse any sector, search any ticker.
  *
  * The briefing answers one fixed question about the AI supply chain. This points
@@ -1051,7 +1054,11 @@ function AnalysisPage({
   const [order, setOrder] = useState("dollar_volume");
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<ScreenedStock[]>([]);
-  const [picked, setPicked] = useState<string[]>([]);
+  // Full rows, not just tickers. The checkbox only exists for names in the
+  // current table, so storing bare strings made a pick from another sector
+  // invisible and impossible to remove — the count said 4 while one box was
+  // ticked. Keeping the row lets the selection tray render it anywhere.
+  const [picked, setPicked] = useState<ScreenedStock[]>([]);
   const [result, setResult] = useState<DailyBriefing | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState<"sectors" | "rows" | "search" | "run" | null>(null);
@@ -1131,23 +1138,37 @@ function AnalysisPage({
     [query, onNotify],
   );
 
-  const toggle = (ticker: string) =>
+  const pickedTickers = useMemo(() => new Set(picked.map((item) => item.ticker)), [picked]);
+
+  const toggle = (row: ScreenedStock) =>
     setPicked((current) =>
-      current.includes(ticker)
-        ? current.filter((item) => item !== ticker)
-        : current.length >= 25
+      current.some((item) => item.ticker === row.ticker)
+        ? current.filter((item) => item.ticker !== row.ticker)
+        : current.length >= MAX_PICKS
           ? current
-          : [...current, ticker],
+          : [...current, row],
     );
+
+  const remove = (ticker: string) =>
+    setPicked((current) => current.filter((item) => item.ticker !== ticker));
 
   const analyse = async () => {
     if (picked.length === 0) return;
     setLoading("run");
     try {
-      const label = activeSector
-        ? (sectors?.find((item) => item.id === activeSector)?.label ?? "")
-        : "自选";
-      const value = await desktopBridge.analyzeSelection(picked, settings, { label });
+      // The selection can span sectors, so labelling it with whichever sector
+      // happens to be open would be wrong. Only claim a sector when every pick
+      // came from it.
+      const sectorsPicked = new Set(picked.map((item) => item.segment));
+      const label =
+        sectorsPicked.size === 1
+          ? (sectors?.find((item) => item.id === picked[0].segment)?.label ?? "自选")
+          : "自选";
+      const value = await desktopBridge.analyzeSelection(
+        picked.map((item) => item.ticker),
+        settings,
+        { label },
+      );
       setResult(value);
       onNotify("success", `已分析 ${picked.length} 只标的`);
     } catch (error) {
@@ -1197,6 +1218,53 @@ function AnalysisPage({
           分析结论
         </span>
       </nav>
+
+      {/* The selection is global — it survives switching sector, searching, and
+          stepping back — so it needs somewhere permanent to live. Previously it
+          only existed as checkboxes inside the current table, which meant a pick
+          made in another sector was invisible and could not be removed: the
+          crumb read "4" while a single box was ticked. */}
+      {picked.length > 0 && (
+        <section className="selection-tray">
+          <div className="selection-head">
+            <strong>已选 {picked.length} 只</strong>
+            {picked.length >= MAX_PICKS && <span className="muted">已达一次 {MAX_PICKS} 只上限</span>}
+            <button className="text-button" disabled={busyAny} onClick={() => setPicked([])}>
+              清空
+            </button>
+          </div>
+          <div className="selection-chips">
+            {picked.map((item) => (
+              <span className="selection-chip" key={item.ticker}>
+                <b className="mono">{item.ticker}</b>
+                <i className={item.change_pct >= 0 ? "pnl-up" : "pnl-down"}>
+                  {signed(item.change_pct)}%
+                </i>
+                <button
+                  aria-label={`移除 ${item.ticker}`}
+                  disabled={busyAny}
+                  onClick={() => remove(item.ticker)}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+          {step !== "result" && (
+            <div className="selection-actions">
+              <button
+                className="primary-button"
+                disabled={busyAny}
+                onClick={() => void analyse()}
+              >
+                {loading === "run"
+                  ? <><LoaderCircle className="spin" size={15} /> 分析中… {elapsed}s（约 {Math.max(picked.length * 6, 10)}s）</>
+                  : <><BrainCircuit size={15} /> 分析这 {picked.length} 只</>}
+              </button>
+            </div>
+          )}
+        </section>
+      )}
 
       {step === "browse" && (
         <>
@@ -1337,14 +1405,17 @@ function AnalysisPage({
                   {rows.slice(0, visible).map((row) => (
                     <tr
                       key={row.ticker}
-                      className={picked.includes(row.ticker) ? "row-picked" : ""}
-                      onClick={() => toggle(row.ticker)}
+                      className={pickedTickers.has(row.ticker) ? "row-picked" : ""}
+                      onClick={() => toggle(row)}
                     >
                       <td>
                         <input
                           type="checkbox"
-                          checked={picked.includes(row.ticker)}
-                          onChange={() => toggle(row.ticker)}
+                          checked={pickedTickers.has(row.ticker)}
+                          // Selecting a 26th silently did nothing. Disable the
+                          // unchecked boxes at the cap so the limit is visible.
+                          disabled={!pickedTickers.has(row.ticker) && picked.length >= MAX_PICKS}
+                          onChange={() => toggle(row)}
                           onClick={(event) => event.stopPropagation()}
                         />
                       </td>
@@ -1374,19 +1445,6 @@ function AnalysisPage({
             </>
           )}
 
-          {/* Pinned so the action stays reachable without scrolling back down a
-              60-row table. */}
-          <div className="action-bar">
-            <button className="primary-button" disabled={busyAny || picked.length === 0} onClick={() => void analyse()}>
-              {loading === "run"
-                ? <><LoaderCircle className="spin" size={15} /> 分析中… {elapsed}s（约 {Math.max(picked.length * 6, 10)}s）</>
-                : <><BrainCircuit size={15} /> 分析选中的 {picked.length} 只</>}
-            </button>
-            {picked.length > 0 && !busyAny && (
-              <button className="text-button" onClick={() => setPicked([])}>清空选择</button>
-            )}
-            {picked.length >= 25 && <span className="muted">已达一次 25 只上限</span>}
-          </div>
         </section>
       )}
 
